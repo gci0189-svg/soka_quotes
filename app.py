@@ -151,8 +151,8 @@ if uploaded_csv and uploaded_zip:
                         except:
                             continue
                 
-                # 如果都找不到，拋出警告並用系統預設
-                if font_c is0 or font_s is None:
+                # 【已修正】如果都找不到，拋出警告並用系統預設
+                if font_c is None or font_s is None:
                     st.warning("⚠️ 倉庫中未找到指定字型，暫時切換為預設字型。")
                     font_c = ImageFont.load_default()
                     font_s = ImageFont.load_default()
