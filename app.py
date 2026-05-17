@@ -3,6 +3,7 @@ import pandas as pd
 import zipfile
 import io
 import os
+import re
 from PIL import Image, ImageDraw, ImageFont
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -10,8 +11,8 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 
-st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器 (A4整頁預覽+極致輕量版)")
-st.write("已修正預覽圖邏輯，現在可完美顯示「一頁 6 張小卡」的 A4 實際排版，並優化記憶體防止崩潰。")
+st.title("🍀 創價鼓勵小卡 A4 2x3 產生器 (檔名數字精準補零版)")
+st.write("已修正預覽圖與底圖匹配機制，強制進行數字標準化配對，確保彩色背景順利讀取。")
 
 # --- 側邊欄 ---
 st.sidebar.header("🎨 小卡視覺調整面板")
@@ -55,21 +56,36 @@ def text_wrap(text, font, max_width, draw):
     return lines
 
 def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, bg_darkness, text_color):
-    target_name = str(row['Image_Name']).strip()
-    img_data = None
-    matched_path = None
+    # 💡 核心修正：將 CSV 裡各種亂七八糟的檔名格式（如 1, 1.0, 001.jpg）通通清洗提取出數字
+    raw_img_name = str(row['Image_Name']).strip()
     
-    # 智慧模糊匹配（解決 bg_ 前綴問題）
-    for name in zip_namelist:
-        if name.endswith(target_name):
-            matched_path = name
-            break
+    # 清除可能帶有的 .0 浮點數尾巴
+    if raw_img_name.endswith('.0'):
+        raw_img_name = raw_img_name[:-2]
+        
+    # 提取裡面的所有數字
+    numbers = re.findall(r'\d+', raw_img_name)
+    
+    matched_path = None
+    if numbers:
+        # 將數字標準化為三位數補零，例如 "1" -> "001"
+        target_num_str = numbers[0].zfill(3)
+        
+        # 去 ZIP 檔名清單裡找有沒有包含 "_001" 或 "001" 的圖片
+        for name in zip_namelist:
+            # 同時檢查是否包含這個補零數字字串，且必須是檔案
+            if target_num_str in name:
+                matched_path = name
+                break
+    
+    # 如果用數字找不到，改用傳統的文字包含配對當作保險
     if not matched_path:
         for name in zip_namelist:
-            if target_name in name:
+            if raw_img_name in name:
                 matched_path = name
                 break
 
+    img_data = None
     if matched_path:
         try:
             img_data = zip_file.read(matched_path)
@@ -77,14 +93,14 @@ def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, 
         except:
             img_data = None
 
-    # 找不到底圖時的防禦米色
+    # 若真的連防禦搜尋都找不到，使用粉米色，堅決不用全黑，避免文字隱形
     if img_data is None:
         card_img = Image.new("RGBA", (1000, 1000), (245, 242, 235, 255))
     
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
     draw = ImageDraw.Draw(card_img, "RGBA")
     
-    # 繪製黯淡遮罩
+    # 繪製半透明黯淡遮罩
     if bg_darkness > 0:
         draw.rectangle([0, 0, 1000, 1000], fill=(0, 0, 0, int(255 * bg_darkness)))
         
@@ -115,7 +131,7 @@ def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, 
 
 if uploaded_csv and uploaded_zip:
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
-        with st.spinner("正在進行智慧排版並建構 A4 整頁預覽..."):
+        with st.spinner("正在執行數字重組配對並建立 A4 2x3 排版..."):
             df = pd.read_csv(uploaded_csv)
             zip_file = zipfile.ZipFile(uploaded_zip)
             zip_namelist = [n for n in zip_file.namelist() if not n.endswith('/')]
@@ -140,7 +156,6 @@ if uploaded_csv and uploaded_zip:
             pdf_buffer = io.BytesIO()
             c = canvas.Canvas(pdf_buffer, pagesize=A4)
             
-            # 建立大畫布來模擬 A4 輸出 (寬 840, 高 1188)
             current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
             page_draw = ImageDraw.Draw(current_page_img)
             
@@ -158,7 +173,6 @@ if uploaded_csv and uploaded_zip:
                 col = grid_idx % 2
                 row_idx = grid_idx // 2
                 
-                # ReportLab PDF 實體座標繪製
                 x_pos_pdf = (margin_x + col * card_w) * mm
                 y_pos_pdf = (297 - margin_y - (row_idx + 1) * card_h) * mm
                 
@@ -172,7 +186,6 @@ if uploaded_csv and uploaded_zip:
                     c.setLineWidth(0.3)
                     c.rect(x_pos_pdf, y_pos_pdf, card_w*mm, card_h*mm)
                 
-                # 💡 修正預覽邏輯：真正將單卡貼入 A4 大畫布的對應格子中
                 x_pos_img = int((margin_x + col * card_w) * 4)
                 y_pos_img = int((margin_y + row_idx * card_h) * 4)
                 
@@ -184,17 +197,14 @@ if uploaded_csv and uploaded_zip:
                 
                 progress_bar.progress((index + 1) / total_cards)
                 
-                # 當滿 6 張或是最後一張時，才將「整頁 A4 畫布」導出並換頁
                 if grid_idx == 5 or index == total_cards - 1:
                     c.showPage()
                     
-                    # 記憶體優化：將大預覽圖適度縮小，並高壓縮存檔，徹底防範 Streamlit 哭臉
                     preview_opt = current_page_img.resize((420, 594), resample=Image.Resampling.BILINEAR)
                     b = io.BytesIO()
                     preview_opt.save(b, format="JPEG", quality=70)
                     temp_preview_bytes.append(b.getvalue())
                     
-                    # 清空重置下一頁 A4 畫布
                     current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
                     page_draw = ImageDraw.Draw(current_page_img)
             
