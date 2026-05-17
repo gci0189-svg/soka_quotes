@@ -49,7 +49,6 @@ if st.session_state.pdf_data and st.session_state.last_params != sidebar_params:
 # ── 工具函式 ──────────────────────────────────────────────────
 
 def hex_to_rgb(hex_color: str) -> tuple:
-    """'#FFFFFF' → (255, 255, 255)"""
     h = hex_color.lstrip('#')
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
@@ -71,11 +70,6 @@ def text_wrap(text, font, max_width, draw):
 
 
 def build_zip_index(zip_bytes: bytes):
-    """
-    接收 zip 的 bytes（UploadedFile.read() 的結果），
-    用 BytesIO 包住確保可反覆 seek/read。
-    回傳 (index_dict, all_image_paths, ZipFile物件)
-    """
     IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
     index, all_paths = {}, []
     zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
@@ -160,11 +154,7 @@ def load_fonts(font_mode, uploaded_font, size_content, size_source):
 
 
 def generate_card_image(row, zf, zip_index, font_c, font_s, bg_darkness, text_color_hex):
-    """
-    ★ 全程使用 RGB 模式，完全避開 Pillow RGBA draw 的 alpha 合成問題。
-    遮罩用 img.paste(black, mask=L_mask)，這是最可靠的方式。
-    """
-    # 1. 載入底圖
+    # 1. 載入底圖（全程 RGB，不用 RGBA）
     card_img = None
     matched  = None
     raw_name = str(row.get('Image_Name', '')).strip()
@@ -181,14 +171,14 @@ def generate_card_image(row, zf, zip_index, font_c, font_s, bg_darkness, text_co
 
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
 
-    # 2. 遮罩：用 paste + L mask，★不用 RGBA draw（RGBA draw 不做 alpha 合成，直接替換像素）
+    # 2. 遮罩：paste + L mask（最可靠，不用 RGBA draw）
     if bg_darkness > 0:
-        black   = Image.new("RGB", (1000, 1000), (0, 0, 0))
-        mask_l  = Image.new("L",   (1000, 1000), int(255 * bg_darkness))
+        black  = Image.new("RGB", (1000, 1000), (0, 0, 0))
+        mask_l = Image.new("L",   (1000, 1000), int(255 * bg_darkness))
         card_img.paste(black, (0, 0), mask_l)
 
-    # 3. 畫文字（RGB 模式，fill 直接用 tuple，不需要 alpha channel）
-    draw = ImageDraw.Draw(card_img)
+    # 3. 畫文字（RGB 模式，fill 直接用 tuple）
+    draw        = ImageDraw.Draw(card_img)
     fill_main   = hex_to_rgb(text_color_hex)
     fill_shadow = (0, 0, 0)
 
@@ -214,7 +204,7 @@ def generate_card_image(row, zf, zip_index, font_c, font_s, bg_darkness, text_co
         draw.text((xs+1, ys+1), source_text, fill=fill_shadow, font=font_s)
         draw.text((xs,   ys  ), source_text, fill=fill_main,   font=font_s)
 
-    return card_img, matched   # 已經是 RGB，直接回傳
+    return card_img, matched
 
 
 # ── 診斷 ──────────────────────────────────────────────────────
@@ -252,7 +242,7 @@ if uploaded_csv and uploaded_zip:
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
         with st.spinner("正在建構 A4 2x3 排版..."):
 
-            zip_bytes = uploaded_zip.read()   # ★ 先讀成 bytes，BytesIO 包住才能反覆讀
+            zip_bytes = uploaded_zip.read()
             df = pd.read_csv(uploaded_csv)
             zip_index, all_paths, zf = build_zip_index(zip_bytes)
             st.sidebar.caption(f"📦 ZIP 偵測到 {len(all_paths)} 張圖片")
@@ -355,10 +345,11 @@ if st.session_state.pdf_data and st.session_state.preview_bytes_list:
         total_p     = len(st.session_state.preview_bytes_list)
         page_select = st.slider("切換預覽頁數", 1, total_p, 1) if total_p > 1 else 1
         st.write(f"📄 第 **{page_select}** / {total_p} 頁（每頁 6 張小卡）")
+        # ★ 用 width='stretch' 取代已棄用的 use_container_width=True
         st.image(
             st.session_state.preview_bytes_list[page_select - 1],
             caption=f"第 {page_select} 頁 A4 實印排版",
-            use_container_width=True,
+            width="stretch",
         )
 
 elif not (uploaded_csv and uploaded_zip):
