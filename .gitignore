@@ -1,0 +1,7 @@
+# 忽略 Colab 下載的大型素材與圖片，避免塞爆 GitHub
+*.zip
+*.csv
+images/
+soka_cards_export/
+.streamlit/
+__pycache__/
