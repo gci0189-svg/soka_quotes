@@ -49,7 +49,7 @@ if st.session_state.pdf_data and st.session_state.last_params != sidebar_params:
 # ── 工具函式 ──────────────────────────────────────────────────
 
 def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
-    """把 '#FFFFFF' 轉成 (255, 255, 255, alpha)，Pillow RGBA 模式必須用 tuple。"""
+    """'#FFFFFF' → (255, 255, 255, alpha)。Pillow RGBA 模式必須傳 tuple，不能傳 hex 字串。"""
     h = hex_color.lstrip('#')
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
 
@@ -70,89 +70,85 @@ def text_wrap(text, font, max_width, draw):
     return lines
 
 
-def build_zip_index(zip_file):
+def build_zip_index(zip_bytes: bytes):
     """
-    建立圖片索引 dict，key 涵蓋：
-      - basename 小寫（含副檔名）: 'bg_001.jpg'
-      - stem 小寫（不含副檔名）:  'bg_001'
-      - 所有數字串（原始、去前導零、補零3位、補零2位）: '001','1','01'
-      - prefix_數字 格式: 'bg_1', 'bg_01', 'bg_001'（處理 bg_00 → bg_0 誤配問題）
+    從 zip 的原始 bytes 建立圖片索引。
+    ★ 接受 bytes 而非 UploadedFile，避免 Streamlit Cloud 上 seek 失效問題。
+    回傳 (index_dict, all_image_paths, zip_file_object)
+    index key 涵蓋：basename小寫、stem小寫、數字串多種變體、prefix_數字格式。
     """
     IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
     index, all_paths = {}, []
 
-    for name in zip_file.namelist():
+    # 用 BytesIO 包住，確保可以反覆 seek
+    zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+
+    for name in zf.namelist():
         if '__MACOSX' in name or name.endswith('/'):
             continue
         bn = os.path.basename(name)
-        if bn.startswith('.'):
+        if not bn or bn.startswith('.'):
             continue
         ext = os.path.splitext(bn)[1].lower()
         if ext not in IMG_EXT:
             continue
 
         all_paths.append(name)
-        stem = os.path.splitext(bn)[0]   # e.g. 'bg_001'
+        stem = os.path.splitext(bn)[0]
 
-        # basename & stem
         index.setdefault(bn.lower(), name)
         index.setdefault(stem.lower(), name)
 
-        # 所有數字串變體
         nums = re.findall(r'\d+', stem)
         for num in nums:
             n_int = int(num)
-            for key in [num,
-                        str(n_int),           # 去前導零: '001' -> '1'
-                        num.zfill(2),
-                        num.zfill(3),
-                        num.zfill(4)]:
+            for key in [num, str(n_int),
+                        str(n_int).zfill(2),
+                        str(n_int).zfill(3),
+                        str(n_int).zfill(4)]:
                 index.setdefault(key, name)
 
-        # prefix_數字 格式（e.g. 'bg_1', 'bg_01', 'bg_001'）
-        # 找出 stem 中非數字前綴
+        # prefix_數字 格式（e.g. stem='bg_001' → keys: 'bg_1','bg_01','bg_001','bg_0001'）
         m = re.match(r'^([a-zA-Z_\-]+)(\d+)$', stem)
         if m:
             prefix, num_part = m.group(1), m.group(2)
             n_int = int(num_part)
             for pad in [0, 2, 3, 4]:
-                key = prefix + (str(n_int) if pad == 0 else str(n_int).zfill(pad))
-                index.setdefault(key.lower(), name)
+                k = prefix + (str(n_int) if pad == 0 else str(n_int).zfill(pad))
+                index.setdefault(k.lower(), name)
+                index.setdefault((k + '.jpg').lower(), name)
+                index.setdefault((k + '.jpeg').lower(), name)
+                index.setdefault((k + '.png').lower(), name)
 
-    return index, all_paths
+    return index, all_paths, zf
 
 
 def find_in_index(raw_img_name: str, index: dict):
-    """
-    嘗試多種 key 格式配對，回傳 zip 路徑或 None。
-    特別處理 'bg_00.jpg' 這類情況：
-      '00' -> int=0 -> 也會嘗試 'bg_0', 'bg_000' 等，
-      但若 zip 裡沒有則回 None（CSV 資料本身就有誤）。
-    """
     raw = str(raw_img_name).strip()
-    if raw.endswith('.0'):          # pandas 浮點尾巴
+    if raw.endswith('.0'):
         raw = raw[:-2]
 
-    stem_raw = os.path.splitext(raw)[0]   # 去副檔名
-
+    stem_raw = os.path.splitext(raw)[0]
     candidates = [raw.lower(), stem_raw.lower()]
 
-    # 數字變體
     nums = re.findall(r'\d+', stem_raw)
     for num in nums:
         n_int = int(num)
-        for key in [num, str(n_int), num.zfill(2), num.zfill(3), num.zfill(4)]:
+        for key in [num, str(n_int),
+                    str(n_int).zfill(2),
+                    str(n_int).zfill(3),
+                    str(n_int).zfill(4)]:
             candidates.append(key)
 
-    # prefix_數字 變體
     m = re.match(r'^([a-zA-Z_\-]+)(\d+)(\.[a-zA-Z]+)?$', raw)
     if m:
         prefix, num_part = m.group(1), m.group(2)
         n_int = int(num_part)
         for pad in [0, 2, 3, 4]:
-            key = prefix + (str(n_int) if pad == 0 else str(n_int).zfill(pad))
-            candidates.append(key.lower())
-            candidates.append((key + '.jpg').lower())
+            k = prefix + (str(n_int) if pad == 0 else str(n_int).zfill(pad))
+            candidates.append(k.lower())
+            for ext in ['.jpg', '.jpeg', '.png']:
+                candidates.append((k + ext).lower())
 
     for key in candidates:
         if key in index:
@@ -179,12 +175,11 @@ def load_fonts(font_mode, uploaded_font, size_content, size_source):
     return fc, fs
 
 
-def generate_card_image(row, zip_file, zip_index, font_c, font_s,
+def generate_card_image(row, zf, zip_index, font_c, font_s,
                         bg_darkness, text_color_hex):
     """
-    回傳 (PIL RGB Image, matched_zip_path_or_None)
-    ★ text_color_hex 必須是 '#RRGGBB' 格式，內部用 hex_to_rgba() 轉換。
-      絕對不能直接把 hex 字串傳給 Pillow fill= —— 那會讓 RGBA 模式靜默出錯，畫面全黑！
+    ★ zf 是從 BytesIO 建立的 ZipFile，可以反覆 read() 不會失效。
+    ★ text_color_hex 是 '#RRGGBB'，內部轉 tuple 再傳給 Pillow。
     """
     card_img = None
     matched  = None
@@ -193,27 +188,24 @@ def generate_card_image(row, zip_file, zip_index, font_c, font_s,
     try:
         matched = find_in_index(raw_name, zip_index)
         if matched:
-            img_data = zip_file.read(matched)
+            img_data = zf.read(matched)
             card_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
     except Exception:
         card_img = None
 
-    # 找不到底圖 → 米灰色預設背景
     if card_img is None:
         card_img = Image.new("RGBA", (1000, 1000), (220, 217, 210, 255))
 
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
     draw = ImageDraw.Draw(card_img, "RGBA")
 
-    # 遮罩
     if bg_darkness > 0:
         draw.rectangle([0, 0, 1000, 1000], fill=(0, 0, 0, int(255 * bg_darkness)))
 
-    # ★ 關鍵修正：hex → RGBA tuple，Pillow RGBA 模式必須用 tuple
+    # ★ 關鍵：hex 字串 → RGBA tuple，絕對不能直接傳 hex 字串給 Pillow RGBA 模式
     fill_main   = hex_to_rgba(text_color_hex, 255)
     fill_shadow = (0, 0, 0, 180)
 
-    # 正文
     content_text = str(row.get('Content', '')).replace(" ", "")
     lines = text_wrap(content_text, font_c, 800, draw)
 
@@ -228,7 +220,6 @@ def generate_card_image(row, zip_file, zip_index, font_c, font_s,
         draw.text((x+2, y+2), line, fill=fill_shadow, font=font_c)
         draw.text((x,   y  ), line, fill=fill_main,   font=font_c)
 
-    # 出處
     source_text = str(row.get('Source', ''))
     if source_text and source_text != "nan":
         bs = draw.textbbox((0, 0), source_text, font=font_s)
@@ -244,12 +235,11 @@ def generate_card_image(row, zip_file, zip_index, font_c, font_s,
 
 if uploaded_csv and uploaded_zip:
 
-    with st.expander("🔍 診斷：查看 ZIP 內容 & 前 10 筆配對（建議先確認再正式排版）",
-                     expanded=False):
+    with st.expander("🔍 診斷：查看 ZIP 內容 & 前 10 筆配對", expanded=False):
         if st.button("執行診斷（不生成 PDF）"):
+            zip_bytes_d = uploaded_zip.read()   # ★ 先讀成 bytes
             df_d = pd.read_csv(uploaded_csv)
-            zf_d = zipfile.ZipFile(uploaded_zip)
-            idx_d, paths_d = build_zip_index(zf_d)
+            idx_d, paths_d, zf_d = build_zip_index(zip_bytes_d)
 
             st.write(f"**ZIP 合法圖片數：{len(paths_d)}**")
             st.write("ZIP 前 20 個圖片路徑：")
@@ -260,7 +250,7 @@ if uploaded_csv and uploaded_zip:
                 raw = str(r.get('Image_Name', ''))
                 hit = find_in_index(raw, idx_d)
                 rows_out.append({"Image_Name (CSV)": raw,
-                                 "配對到的 ZIP 路徑": hit or "❌ 找不到（CSV 資料有誤）"})
+                                 "配對到的 ZIP 路徑": hit or "❌ 找不到"})
             st.write("**前 10 筆配對結果：**")
             st.table(pd.DataFrame(rows_out))
 
@@ -277,9 +267,13 @@ if uploaded_csv and uploaded_zip:
     # ── 正式生成 ──────────────────────────────────────────────
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
         with st.spinner("正在安全建構 A4 2x3 排版..."):
-            df       = pd.read_csv(uploaded_csv)
-            zip_file = zipfile.ZipFile(uploaded_zip)
-            zip_index, all_paths = build_zip_index(zip_file)
+
+            # ★★★ 關鍵修正：先把 UploadedFile 讀成 bytes，
+            #      再用 BytesIO 包住給 ZipFile，確保可以反覆 seek/read
+            zip_bytes = uploaded_zip.read()
+            df = pd.read_csv(uploaded_csv)
+            zip_index, all_paths, zf = build_zip_index(zip_bytes)
+
             st.sidebar.caption(f"📦 ZIP 偵測到 {len(all_paths)} 張圖片")
 
             font_c, font_s = load_fonts(font_mode, uploaded_font,
@@ -299,8 +293,8 @@ if uploaded_csv and uploaded_zip:
 
             for idx, row in df.iterrows():
                 card_pil, matched_path = generate_card_image(
-                    row, zip_file, zip_index, font_c, font_s,
-                    bg_darkness, text_color          # ← 傳 hex 字串，函式內轉 tuple
+                    row, zf, zip_index, font_c, font_s,
+                    bg_darkness, text_color
                 )
                 if not matched_path:
                     miss_list.append(str(row.get('Image_Name', idx)))
@@ -339,7 +333,7 @@ if uploaded_csv and uploaded_zip:
                 if gi == 5 or idx == total - 1:
                     c.showPage()
                     prev = cur_page.resize((420, 594), resample=Image.Resampling.BILINEAR)
-                    b2 = io.BytesIO()
+                    b2   = io.BytesIO()
                     prev.save(b2, format="JPEG", quality=70)
                     previews.append(b2.getvalue())
                     cur_page = Image.new("RGB", (840, 1188), (255, 255, 255))
@@ -348,9 +342,9 @@ if uploaded_csv and uploaded_zip:
             c.save()
             pdf_buf.seek(0)
 
-            st.session_state.pdf_data            = pdf_buf.getvalue()
-            st.session_state.preview_bytes_list  = previews
-            st.session_state.last_params         = sidebar_params.copy()
+            st.session_state.pdf_data           = pdf_buf.getvalue()
+            st.session_state.preview_bytes_list = previews
+            st.session_state.last_params        = sidebar_params.copy()
 
             if miss_list:
                 st.warning(
