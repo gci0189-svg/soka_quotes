@@ -49,7 +49,7 @@ if st.session_state.pdf_data and st.session_state.last_params != sidebar_params:
 # ── 工具函式 ──────────────────────────────────────────────────
 
 def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
-    """'#FFFFFF' → (255, 255, 255, alpha)。Pillow RGBA 模式必須傳 tuple，不能傳 hex 字串。"""
+    """'#FFFFFF' → (255,255,255,alpha)。Pillow RGBA 模式必須傳 tuple，不能傳 hex 字串。"""
     h = hex_color.lstrip('#')
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
 
@@ -72,16 +72,13 @@ def text_wrap(text, font, max_width, draw):
 
 def build_zip_index(zip_bytes: bytes):
     """
-    從 zip 的原始 bytes 建立圖片索引。
-    ★ 接受 bytes 而非 UploadedFile，避免 Streamlit Cloud 上 seek 失效問題。
-    回傳 (index_dict, all_image_paths, zip_file_object)
-    index key 涵蓋：basename小寫、stem小寫、數字串多種變體、prefix_數字格式。
+    接收 zip 的原始 bytes（而非 UploadedFile），用 BytesIO 包住確保可反覆 seek。
+    回傳 (index_dict, all_image_paths, ZipFile物件)
+    index key 涵蓋：basename小寫、stem小寫、數字串多種補零變體、prefix_數字格式。
     """
     IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
     index, all_paths = {}, []
-
-    # 用 BytesIO 包住，確保可以反覆 seek
-    zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
+    zf = zipfile.ZipFile(io.BytesIO(zip_bytes))   # ★ BytesIO 可反覆讀取
 
     for name in zf.namelist():
         if '__MACOSX' in name or name.endswith('/'):
@@ -89,66 +86,56 @@ def build_zip_index(zip_bytes: bytes):
         bn = os.path.basename(name)
         if not bn or bn.startswith('.'):
             continue
-        ext = os.path.splitext(bn)[1].lower()
-        if ext not in IMG_EXT:
+        if os.path.splitext(bn)[1].lower() not in IMG_EXT:
             continue
 
         all_paths.append(name)
         stem = os.path.splitext(bn)[0]
 
+        # basename & stem
         index.setdefault(bn.lower(), name)
         index.setdefault(stem.lower(), name)
 
-        nums = re.findall(r'\d+', stem)
-        for num in nums:
-            n_int = int(num)
-            for key in [num, str(n_int),
-                        str(n_int).zfill(2),
-                        str(n_int).zfill(3),
-                        str(n_int).zfill(4)]:
+        # 純數字變體
+        for num in re.findall(r'\d+', stem):
+            n = int(num)
+            for key in [num, str(n), str(n).zfill(2), str(n).zfill(3), str(n).zfill(4)]:
                 index.setdefault(key, name)
 
-        # prefix_數字 格式（e.g. stem='bg_001' → keys: 'bg_1','bg_01','bg_001','bg_0001'）
+        # prefix_數字 格式（e.g. 'bg_001' → 'bg_1','bg_01','bg_001'...）
         m = re.match(r'^([a-zA-Z_\-]+)(\d+)$', stem)
         if m:
             prefix, num_part = m.group(1), m.group(2)
-            n_int = int(num_part)
+            n = int(num_part)
             for pad in [0, 2, 3, 4]:
-                k = prefix + (str(n_int) if pad == 0 else str(n_int).zfill(pad))
-                index.setdefault(k.lower(), name)
-                index.setdefault((k + '.jpg').lower(), name)
-                index.setdefault((k + '.jpeg').lower(), name)
-                index.setdefault((k + '.png').lower(), name)
+                k = prefix + (str(n) if pad == 0 else str(n).zfill(pad))
+                for suffix in ['', '.jpg', '.jpeg', '.png']:
+                    index.setdefault((k + suffix).lower(), name)
 
     return index, all_paths, zf
 
 
 def find_in_index(raw_img_name: str, index: dict):
     raw = str(raw_img_name).strip()
-    if raw.endswith('.0'):
+    if raw.endswith('.0'):          # pandas 浮點尾巴
         raw = raw[:-2]
 
     stem_raw = os.path.splitext(raw)[0]
     candidates = [raw.lower(), stem_raw.lower()]
 
-    nums = re.findall(r'\d+', stem_raw)
-    for num in nums:
-        n_int = int(num)
-        for key in [num, str(n_int),
-                    str(n_int).zfill(2),
-                    str(n_int).zfill(3),
-                    str(n_int).zfill(4)]:
+    for num in re.findall(r'\d+', stem_raw):
+        n = int(num)
+        for key in [num, str(n), str(n).zfill(2), str(n).zfill(3), str(n).zfill(4)]:
             candidates.append(key)
 
     m = re.match(r'^([a-zA-Z_\-]+)(\d+)(\.[a-zA-Z]+)?$', raw)
     if m:
         prefix, num_part = m.group(1), m.group(2)
-        n_int = int(num_part)
+        n = int(num_part)
         for pad in [0, 2, 3, 4]:
-            k = prefix + (str(n_int) if pad == 0 else str(n_int).zfill(pad))
-            candidates.append(k.lower())
-            for ext in ['.jpg', '.jpeg', '.png']:
-                candidates.append((k + ext).lower())
+            k = prefix + (str(n) if pad == 0 else str(n).zfill(pad))
+            for suffix in ['', '.jpg', '.jpeg', '.png']:
+                candidates.append((k + suffix).lower())
 
     for key in candidates:
         if key in index:
@@ -164,7 +151,8 @@ def load_fonts(font_mode, uploaded_font, size_content, size_source):
         buf.seek(0)
         fs = ImageFont.truetype(buf, size_source)
     else:
-        for p in ["fonts/芫荽.ttf", "芫荽.ttf"]:
+        # 字型在 GitHub 根目錄，Streamlit Cloud 工作目錄即為根目錄
+        for p in ["芫荽.ttf", "fonts/芫荽.ttf"]:
             if os.path.exists(p):
                 fc = ImageFont.truetype(p, size_content)
                 fs = ImageFont.truetype(p, size_source)
@@ -175,12 +163,7 @@ def load_fonts(font_mode, uploaded_font, size_content, size_source):
     return fc, fs
 
 
-def generate_card_image(row, zf, zip_index, font_c, font_s,
-                        bg_darkness, text_color_hex):
-    """
-    ★ zf 是從 BytesIO 建立的 ZipFile，可以反覆 read() 不會失效。
-    ★ text_color_hex 是 '#RRGGBB'，內部轉 tuple 再傳給 Pillow。
-    """
+def generate_card_image(row, zf, zip_index, font_c, font_s, bg_darkness, text_color_hex):
     card_img = None
     matched  = None
     raw_name = str(row.get('Image_Name', '')).strip()
@@ -188,8 +171,7 @@ def generate_card_image(row, zf, zip_index, font_c, font_s,
     try:
         matched = find_in_index(raw_name, zip_index)
         if matched:
-            img_data = zf.read(matched)
-            card_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
+            card_img = Image.open(io.BytesIO(zf.read(matched))).convert("RGBA")
     except Exception:
         card_img = None
 
@@ -197,20 +179,20 @@ def generate_card_image(row, zf, zip_index, font_c, font_s,
         card_img = Image.new("RGBA", (1000, 1000), (220, 217, 210, 255))
 
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
-    draw = ImageDraw.Draw(card_img, "RGBA")
+    draw     = ImageDraw.Draw(card_img, "RGBA")
 
     if bg_darkness > 0:
         draw.rectangle([0, 0, 1000, 1000], fill=(0, 0, 0, int(255 * bg_darkness)))
 
-    # ★ 關鍵：hex 字串 → RGBA tuple，絕對不能直接傳 hex 字串給 Pillow RGBA 模式
+    # ★ hex → RGBA tuple，RGBA 模式不能傳 hex 字串否則 Pillow 靜默失敗導致全黑
     fill_main   = hex_to_rgba(text_color_hex, 255)
     fill_shadow = (0, 0, 0, 180)
 
     content_text = str(row.get('Content', '')).replace(" ", "")
     lines = text_wrap(content_text, font_c, 800, draw)
 
-    bh     = draw.textbbox((0, 0), "高", font=font_c)
-    lh     = (bh[3] - bh[1]) * 1.5
+    bh      = draw.textbbox((0, 0), "高", font=font_c)
+    lh      = (bh[3] - bh[1]) * 1.5
     start_y = (1000 - len(lines) * lh) / 2 - 30
 
     for i, line in enumerate(lines):
@@ -237,12 +219,11 @@ if uploaded_csv and uploaded_zip:
 
     with st.expander("🔍 診斷：查看 ZIP 內容 & 前 10 筆配對", expanded=False):
         if st.button("執行診斷（不生成 PDF）"):
-            zip_bytes_d = uploaded_zip.read()   # ★ 先讀成 bytes
+            zip_bytes_d = uploaded_zip.read()
             df_d = pd.read_csv(uploaded_csv)
             idx_d, paths_d, zf_d = build_zip_index(zip_bytes_d)
 
             st.write(f"**ZIP 合法圖片數：{len(paths_d)}**")
-            st.write("ZIP 前 20 個圖片路徑：")
             st.code("\n".join(paths_d[:20]))
 
             rows_out = []
@@ -251,7 +232,6 @@ if uploaded_csv and uploaded_zip:
                 hit = find_in_index(raw, idx_d)
                 rows_out.append({"Image_Name (CSV)": raw,
                                  "配對到的 ZIP 路徑": hit or "❌ 找不到"})
-            st.write("**前 10 筆配對結果：**")
             st.table(pd.DataFrame(rows_out))
 
             for _, r in df_d.iterrows():
@@ -266,14 +246,13 @@ if uploaded_csv and uploaded_zip:
 
     # ── 正式生成 ──────────────────────────────────────────────
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
-        with st.spinner("正在安全建構 A4 2x3 排版..."):
+        with st.spinner("正在建構 A4 2x3 排版..."):
 
-            # ★★★ 關鍵修正：先把 UploadedFile 讀成 bytes，
-            #      再用 BytesIO 包住給 ZipFile，確保可以反覆 seek/read
+            # ★★★ 先把 UploadedFile 讀成 bytes，再交給 build_zip_index
+            # Streamlit UploadedFile 只能讀一次；BytesIO 可反覆 seek/read
             zip_bytes = uploaded_zip.read()
             df = pd.read_csv(uploaded_csv)
             zip_index, all_paths, zf = build_zip_index(zip_bytes)
-
             st.sidebar.caption(f"📦 ZIP 偵測到 {len(all_paths)} 張圖片")
 
             font_c, font_s = load_fonts(font_mode, uploaded_font,
@@ -293,8 +272,7 @@ if uploaded_csv and uploaded_zip:
 
             for idx, row in df.iterrows():
                 card_pil, matched_path = generate_card_image(
-                    row, zf, zip_index, font_c, font_s,
-                    bg_darkness, text_color
+                    row, zf, zip_index, font_c, font_s, bg_darkness, text_color
                 )
                 if not matched_path:
                     miss_list.append(str(row.get('Image_Name', idx)))
