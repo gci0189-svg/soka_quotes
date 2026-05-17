@@ -12,8 +12,8 @@ from reportlab.lib.units import mm
 # 頁面基本設定
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 
-st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器")
-st.write("請上傳先前由 Colab 下載的素材包，一鍵生成適合列印與裁切的 A4 PDF 檔案。")
+st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器 (含每頁預覽)")
+st.write("請上傳先前由 Colab 下載的素材包，一鍵生成並預覽適合列印與裁切的 A4 PDF 檔案。")
 
 # --- 側邊欄控制面板 ---
 st.sidebar.header("🎨 小卡視覺調整面板")
@@ -38,11 +38,17 @@ with col1:
 with col2:
     uploaded_zip = st.file_uploader("2. 上傳素材壓縮包 (soka_all_materials.zip)", type=["zip"])
 
+# --- Session State 初始化 (用來跨元件儲存生成的 PDF 與預覽圖) ---
+if "pdf_data" not in st.session_state:
+    st.session_state.pdf_data = None
+if "preview_pages" not in st.session_state:
+    st.session_state.preview_pages = []
+
 # --- 核心處理邏輯 ---
 def text_wrap(text, font, max_width, draw):
     """將文字根據寬度精準自動換行"""
     lines = []
-    words = list(text)  # 中文字直接拆成單字
+    words = list(text)
     current_line = ""
     
     for word in words:
@@ -63,37 +69,29 @@ def text_wrap(text, font, max_width, draw):
 def generate_card_image(row, zip_file, font_content, font_source, bg_darkness, text_color):
     """在記憶體中將文字壓在背景圖上，生成單張卡片"""
     img_name = f"images/{row['Image_Name']}"
-    
-    # 從 ZIP 中讀取圖片
     try:
         img_data = zip_file.read(img_name)
         card_img = Image.open(io.BytesIO(img_data)).convert("RGB")
     except Exception:
-        # 備用暖色調背景
         card_img = Image.new("RGB", (1000, 1000), (245, 242, 235))
     
-    # 確保解析度為 1000x1000 正方形
     card_img = card_img.resize((1000, 1000))
     
-    # 套用半透明黑色遮罩，提升文字可讀性
     if bg_darkness > 0:
         overlay = Image.new("RGBA", card_img.size, (0, 0, 0, int(255 * bg_darkness)))
         card_img = Image.alpha_composite(card_img.convert("RGBA"), overlay).convert("RGB")
         
     draw = ImageDraw.Draw(card_img)
     
-    # 計算正文排版（限制寬度為 800 像素，預留左右安全邊距）
     max_text_width = 800
-    content_text = str(row['Content']).replace(" ", "")  # 移除多餘空格
+    content_text = str(row['Content']).replace(" ", "")
     lines = text_wrap(content_text, font_content, max_text_width, draw)
     
-    # 計算行高與總高度（加入 1.5 倍行距讓書法體不擁擠）
     sample_bbox = draw.textbbox((0, 0), "高", font=font_content)
     char_height = sample_bbox[3] - sample_bbox[1]
     line_height = char_height * 1.5
     total_text_height = len(lines) * line_height
     
-    # 繪製正文 (垂直完美置中偏上)
     start_y = (1000 - total_text_height) / 2 - 30
     for i, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font_content)
@@ -101,18 +99,15 @@ def generate_card_image(row, zip_file, font_content, font_source, bg_darkness, t
         x = (1000 - w) / 2
         y = start_y + (i * line_height)
         
-        # 增加輕微文字陰影，確保白字在任何風景下都清晰可見
         draw.text((x+2, y+2), line, fill="#000000", font=font_content)
         draw.text((x, y), line, fill=text_color, font=font_content)
         
-    # 繪製出處 (右下角固定邊距)
     source_text = str(row['Source'])
     if source_text and source_text != "nan":
         bbox_s = draw.textbbox((0, 0), source_text, font=font_source)
         w_s = bbox_s[2] - bbox_s[0]
         x_s = 1000 - w_s - 80
         y_s = 880
-        # 出處同樣加陰影
         draw.text((x_s+1, y_s+1), source_text, fill="#000000", font=font_source)
         draw.text((x_s, y_s), source_text, fill=text_color, font=font_source)
         
@@ -120,28 +115,21 @@ def generate_card_image(row, zip_file, font_content, font_source, bg_darkness, t
 
 # --- 觸發生成按鈕 ---
 if uploaded_csv and uploaded_zip:
-    if st.button("🚀 開始批次排版，生成 A4 PDF", type="primary"):
-        with st.spinner("正在讀取素材並渲染高畫質小卡中..."):
+    if st.button("🚀 開始批次排版並生成預覽", type="primary"):
+        with st.spinner("正在讀取素材並同時渲染 A4 預覽畫面中..."):
             
-            # 讀取資料
             df = pd.read_csv(uploaded_csv)
             zip_file = zipfile.ZipFile(uploaded_zip)
             
-            # 精準字型尋找邏輯
+            # 字型尋找邏輯
             font_c, font_s = None, None
-            
             if font_mode == "自行從電腦上傳 TTF" and uploaded_font:
                 font_bytes = io.BytesIO(uploaded_font.read())
                 font_c = ImageFont.truetype(font_bytes, font_size_content)
                 font_bytes.seek(0)
                 font_s = ImageFont.truetype(font_bytes, font_size_source)
             else:
-                # 依序偵測你上傳在 GitHub 上的路徑
-                font_paths = [
-                    "fonts/芫荽.ttf", 
-                    "芫荽.ttf",
-                    "font.ttf"
-                ]
+                font_paths = ["fonts/芫荽.ttf", "芫荽.ttf", "font.ttf"]
                 for p in font_paths:
                     if os.path.exists(p):
                         try:
@@ -150,75 +138,116 @@ if uploaded_csv and uploaded_zip:
                             break
                         except:
                             continue
-                
-                # 【已修正】如果都找不到，拋出警告並用系統預設
                 if font_c is None or font_s is None:
-                    st.warning("⚠️ 倉庫中未找到指定字型，暫時切換為預設字型。")
                     font_c = ImageFont.load_default()
                     font_s = ImageFont.load_default()
 
-            # 建立 PDF 緩衝區
+            # 建立 PDF
             pdf_buffer = io.BytesIO()
             c = canvas.Canvas(pdf_buffer, pagesize=A4)
             
             # A4 精準對齊網格常數 (單位: mm)
             a4_w, a4_h = 210, 297
-            margin_x = 10  # 左右邊界留白
-            margin_y = 15  # 上下邊界留白
-            
-            card_w = 95    # 單張卡片寬度 95mm
-            card_h = 89    # 單張卡片高度 89mm (2x3 完美填滿 A4 可列印區)
+            margin_x, margin_y = 10, 15
+            card_w, card_h = 95, 89
             
             total_cards = len(df)
-            
-            # 建立 Streamlit 進度條
             progress_bar = st.progress(0)
             
+            # 用來存放每一頁 A4 預覽圖的畫布
+            current_page_img = Image.new("RGB", (2100, 2970), (255, 255, 255))
+            page_draw = ImageDraw.Draw(current_page_img)
+            temp_preview_pages = []
+
             for index, row in df.iterrows():
-                # 1. 渲染卡片影像
+                # 1. 渲染單張卡片
                 card_pil = generate_card_image(row, zip_file, font_c, font_s, bg_darkness, text_color)
                 
-                # 2. 計算當頁 A4 的網格位置 (0~5)
+                # 2. 計算網格位置
                 grid_idx = index % 6
-                col = grid_idx % 2          # 0為左欄，1為右欄
-                row_idx = grid_idx // 2      # 0上、1中、2下
+                col = grid_idx % 2
+                row_idx = grid_idx // 2
                 
-                # ReportLab 座標系轉換（起點在左下角）
-                x_pos = (margin_x + col * card_w) * mm
-                y_pos = (a4_h - margin_y - (row_idx + 1) * card_h) * mm
+                # --- PDF 繪製邏輯 (起點左下角) ---
+                x_pos_pdf = (margin_x + col * card_w) * mm
+                y_pos_pdf = (a4_h - margin_y - (row_idx + 1) * card_h) * mm
                 
-                # 將圖片轉為 JPEG 壓縮流，餵給 PDF
                 img_byte_arr = io.BytesIO()
                 card_pil.save(img_byte_arr, format='JPEG', quality=90)
                 img_byte_arr.seek(0)
+                c.drawImage(canvas.ImageReader(img_byte_arr), x_pos_pdf, y_pos_pdf, width=card_w*mm, height=card_h*mm)
                 
-                c.drawImage(canvas.ImageReader(img_byte_arr), x_pos, y_pos, width=card_w*mm, height=card_h*mm)
-                
-                # 3. 繪製裁切線
                 if show_cut_lines:
-                    c.setStrokeColorRGB(0.7, 0.7, 0.7)  # 質感淺灰色，方便裁切又不影響美觀
+                    c.setStrokeColorRGB(0.7, 0.7, 0.7)
                     c.setLineWidth(0.3)
-                    c.setDash(2, 2)  # 虛線
-                    c.rect(x_pos, y_pos, card_w*mm, card_h*mm)
+                    c.setDash(2, 2)
+                    c.rect(x_pos_pdf, y_pos_pdf, card_w*mm, card_h*mm)
                 
-                # 更新進度條
+                # --- 【新增】即時預覽圖繪製邏輯 (起點左上角，放大10倍以保高畫質) ---
+                x_pos_img = (margin_x + col * card_w) * 10
+                y_pos_img = (margin_y + row_idx * card_h) * 10
+                
+                # 將 1000x1000 的卡片縮放到網格對應的像素 (950x890) 並貼上
+                resized_card_for_preview = card_pil.resize((card_w * 10, card_h * 10))
+                current_page_img.paste(resized_card_for_preview, (x_pos_img, y_pos_img))
+                
+                if show_cut_lines:
+                    # 在預覽圖上補上裁切外框
+                    page_draw.rect([x_pos_img, y_pos_img, x_pos_img + card_w*10, y_pos_img + card_h*10], outline=(180, 180, 180), width=3)
+                
                 progress_bar.progress((index + 1) / total_cards)
                 
-                # 每滿 6 張或到最後一張，換頁
+                # 每滿 6 張或最後一張，收尾這一頁
                 if grid_idx == 5 or index == total_cards - 1:
                     c.showPage()
+                    # 儲存當前 A4 頁面預覽圖，並重新建立下一頁的畫布
+                    temp_preview_pages.append(current_page_img)
+                    current_page_img = Image.new("RGB", (2100, 2970), (255, 255, 255))
+                    page_draw = ImageDraw.Draw(current_page_img)
             
             c.save()
             pdf_buffer.seek(0)
             
-            st.success(f"🎉 完美排版完成！已成功將 {total_cards} 條箴言轉換為 A4 2x3 印刷規格 PDF。")
-            
-            # 提供大按鈕下載
+            # 將結果寫入 Session State 確保換頁預覽時資料不會消失
+            st.session_state.pdf_data = pdf_buffer.getvalue()
+            st.session_state.preview_pages = temp_preview_pages
+            st.success(f"🎉 完美排版完成！共生成 {len(temp_preview_pages)} 頁 A4 排版。")
+
+    # --- 顯示結果與每一頁的即時預覽區 ---
+    if st.session_state.pdf_data and st.session_state.preview_pages:
+        st.write("---")
+        
+        # 建立下載與預覽的兩欄佈局
+        col_dl, col_view = st.columns([1, 2])
+        
+        with col_dl:
+            st.subheader("📥 檔案下載")
             st.download_button(
-                label="📥 下載 2x3 A4 完美列印 PDF",
-                data=pdf_buffer,
+                label="🍀 下載 2x3 A4 完美列印 PDF",
+                data=st.session_state.pdf_data,
                 file_name="soka_encouragement_cards_A4.pdf",
-                mime="application/pdf"
+                mime="application/pdf",
+                type="primary"
+            )
+            st.info("💡 溫馨提醒：列印 PDF 時請將印表機設定為「實際大小(100%)」或「不縮放」，裁切線才會最準確喔！")
+            
+        with col_view:
+            st.subheader("👀 A4 每頁排版即時預覽")
+            total_p = len(st.session_state.preview_pages)
+            
+            # 如果總頁數大於 1 頁，顯示滑桿讓使用者換頁
+            if total_p > 1:
+                page_select = st.slider("切換預覽頁數", 1, total_p, 1)
+            else:
+                page_select = 1
+                
+            st.write(f"📄 當前正在預覽第 **{page_select}** / {total_p} 頁")
+            
+            # 顯示該頁的 A4 預覽圖
+            st.image(
+                st.session_state.preview_pages[page_select - 1], 
+                caption=f"第 {page_select} 頁 A4 實際排版樣貌", 
+                use_container_width=True
             )
 else:
-    st.info("💡 請在上方欄位分別拖入 csv 與 zip 素材包，系統就會啟動批次 PDF 排版功能。")
+    st.info("💡 請在上方欄位分別拖入 csv 與 zip 素材包，系統就會啟動批次 PDF 排版與即時預覽功能。")
