@@ -12,9 +12,10 @@ from reportlab.lib.units import mm
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
 
-# --- 側邊欄 ---
+# ── 側邊欄 ───────────────────────────────────────────────────
 st.sidebar.header("🎨 小卡視覺調整面板")
-font_mode = st.sidebar.radio("中文字型來源", ["使用 GitHub 倉庫內置字型 (芫荽.ttf)", "自行從電腦上傳 TTF"])
+font_mode = st.sidebar.radio("中文字型來源",
+    ["使用 GitHub 倉庫內置字型 (芫荽.ttf)", "自行從電腦上傳 TTF"])
 uploaded_font = None
 if font_mode == "自行從電腦上傳 TTF":
     uploaded_font = st.sidebar.file_uploader("上傳字型 (.ttf)", type=["ttf"])
@@ -31,77 +32,127 @@ sidebar_params = dict(
     bg_darkness=bg_darkness, show_cut_lines=show_cut_lines,
 )
 
-# --- 主畫面 ---
+# ── 主畫面上傳 ────────────────────────────────────────────────
 col1, col2 = st.columns(2)
 with col1:
     uploaded_csv = st.file_uploader("1. 上傳語錄表格 (soka_quotes.csv)", type=["csv"])
 with col2:
     uploaded_zip = st.file_uploader("2. 上傳素材壓縮包 (soka_all_materials.zip)", type=["zip"])
 
-for key in ("pdf_data", "preview_bytes_list", "last_params"):
-    if key not in st.session_state:
-        st.session_state[key] = None if key != "preview_bytes_list" else []
+for k, v in [("pdf_data", None), ("preview_bytes_list", []), ("last_params", None)]:
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 if st.session_state.pdf_data and st.session_state.last_params != sidebar_params:
     st.sidebar.warning("⚠️ 參數已變更，請重新點擊「開始批次排版」以套用。")
 
-# ── 工具函式 ──────────────────────────────────────────────
+# ── 工具函式 ──────────────────────────────────────────────────
+
+def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
+    """把 '#FFFFFF' 轉成 (255, 255, 255, alpha)，Pillow RGBA 模式必須用 tuple。"""
+    h = hex_color.lstrip('#')
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
 
 def text_wrap(text, font, max_width, draw):
-    lines, current_line = [], ""
-    for ch in list(text):
-        test = current_line + ch
-        bbox = draw.textbbox((0, 0), test, font=font)
-        if (bbox[2] - bbox[0]) <= max_width:
-            current_line = test
+    lines, cur = [], ""
+    for ch in text:
+        test = cur + ch
+        w = draw.textbbox((0, 0), test, font=font)[2]
+        if w <= max_width:
+            cur = test
         else:
-            if current_line:
-                lines.append(current_line)
-            current_line = ch
-    if current_line:
-        lines.append(current_line)
+            if cur:
+                lines.append(cur)
+            cur = ch
+    if cur:
+        lines.append(cur)
     return lines
 
 
 def build_zip_index(zip_file):
     """
-    建立 zip 圖片索引。
-    回傳 (index_dict, all_image_paths)
-    index key 涵蓋：basename小寫、stem小寫、所有數字串(原始/去前導零/補零3位)
+    建立圖片索引 dict，key 涵蓋：
+      - basename 小寫（含副檔名）: 'bg_001.jpg'
+      - stem 小寫（不含副檔名）:  'bg_001'
+      - 所有數字串（原始、去前導零、補零3位、補零2位）: '001','1','01'
+      - prefix_數字 格式: 'bg_1', 'bg_01', 'bg_001'（處理 bg_00 → bg_0 誤配問題）
     """
     IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
     index, all_paths = {}, []
 
     for name in zip_file.namelist():
-        if '__MACOSX' in name or name.endswith('/') or os.path.basename(name).startswith('.'):
+        if '__MACOSX' in name or name.endswith('/'):
             continue
-        ext = os.path.splitext(name)[1].lower()
+        bn = os.path.basename(name)
+        if bn.startswith('.'):
+            continue
+        ext = os.path.splitext(bn)[1].lower()
         if ext not in IMG_EXT:
             continue
 
         all_paths.append(name)
-        basename = os.path.basename(name)
-        stem     = os.path.splitext(basename)[0]
+        stem = os.path.splitext(bn)[0]   # e.g. 'bg_001'
 
-        for key in [basename.lower(), stem.lower()]:
-            index.setdefault(key, name)
+        # basename & stem
+        index.setdefault(bn.lower(), name)
+        index.setdefault(stem.lower(), name)
 
-        for num in re.findall(r'\d+', stem):
-            index.setdefault(num, name)
-            index.setdefault(num.lstrip('0') or '0', name)
-            index.setdefault(num.zfill(3), name)
+        # 所有數字串變體
+        nums = re.findall(r'\d+', stem)
+        for num in nums:
+            n_int = int(num)
+            for key in [num,
+                        str(n_int),           # 去前導零: '001' -> '1'
+                        num.zfill(2),
+                        num.zfill(3),
+                        num.zfill(4)]:
+                index.setdefault(key, name)
+
+        # prefix_數字 格式（e.g. 'bg_1', 'bg_01', 'bg_001'）
+        # 找出 stem 中非數字前綴
+        m = re.match(r'^([a-zA-Z_\-]+)(\d+)$', stem)
+        if m:
+            prefix, num_part = m.group(1), m.group(2)
+            n_int = int(num_part)
+            for pad in [0, 2, 3, 4]:
+                key = prefix + (str(n_int) if pad == 0 else str(n_int).zfill(pad))
+                index.setdefault(key.lower(), name)
 
     return index, all_paths
 
 
-def find_in_index(raw_img_name, index):
+def find_in_index(raw_img_name: str, index: dict):
+    """
+    嘗試多種 key 格式配對，回傳 zip 路徑或 None。
+    特別處理 'bg_00.jpg' 這類情況：
+      '00' -> int=0 -> 也會嘗試 'bg_0', 'bg_000' 等，
+      但若 zip 裡沒有則回 None（CSV 資料本身就有誤）。
+    """
     raw = str(raw_img_name).strip()
-    if raw.endswith('.0'):
+    if raw.endswith('.0'):          # pandas 浮點尾巴
         raw = raw[:-2]
 
-    candidates = [raw, raw.lower(), os.path.splitext(raw)[0].lower()]
-    for num in re.findall(r'\d+', raw):
-        candidates += [num, num.lstrip('0') or '0', num.zfill(3)]
+    stem_raw = os.path.splitext(raw)[0]   # 去副檔名
+
+    candidates = [raw.lower(), stem_raw.lower()]
+
+    # 數字變體
+    nums = re.findall(r'\d+', stem_raw)
+    for num in nums:
+        n_int = int(num)
+        for key in [num, str(n_int), num.zfill(2), num.zfill(3), num.zfill(4)]:
+            candidates.append(key)
+
+    # prefix_數字 變體
+    m = re.match(r'^([a-zA-Z_\-]+)(\d+)(\.[a-zA-Z]+)?$', raw)
+    if m:
+        prefix, num_part = m.group(1), m.group(2)
+        n_int = int(num_part)
+        for pad in [0, 2, 3, 4]:
+            key = prefix + (str(n_int) if pad == 0 else str(n_int).zfill(pad))
+            candidates.append(key.lower())
+            candidates.append((key + '.jpg').lower())
 
     for key in candidates:
         if key in index:
@@ -110,31 +161,31 @@ def find_in_index(raw_img_name, index):
 
 
 def load_fonts(font_mode, uploaded_font, size_content, size_source):
-    font_c = font_s = None
+    fc = fs = None
     if font_mode == "自行從電腦上傳 TTF" and uploaded_font:
         buf = io.BytesIO(uploaded_font.read())
-        font_c = ImageFont.truetype(buf, size_content)
+        fc = ImageFont.truetype(buf, size_content)
         buf.seek(0)
-        font_s = ImageFont.truetype(buf, size_source)
+        fs = ImageFont.truetype(buf, size_source)
     else:
         for p in ["fonts/芫荽.ttf", "芫荽.ttf"]:
             if os.path.exists(p):
-                font_c = ImageFont.truetype(p, size_content)
-                font_s = ImageFont.truetype(p, size_source)
+                fc = ImageFont.truetype(p, size_content)
+                fs = ImageFont.truetype(p, size_source)
                 break
-    if font_c is None:
-        font_c = ImageFont.load_default()
-        font_s = ImageFont.load_default()
-    return font_c, font_s
+    if fc is None:
+        fc = ImageFont.load_default()
+        fs = ImageFont.load_default()
+    return fc, fs
 
 
-def hex_to_rgba(hex_color, alpha=255):
-    h = hex_color.lstrip('#')
-    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4)) + (alpha,)
-
-
-def generate_card_image(row, zip_file, zip_index, font_content, font_source,
-                        bg_darkness, text_color):
+def generate_card_image(row, zip_file, zip_index, font_c, font_s,
+                        bg_darkness, text_color_hex):
+    """
+    回傳 (PIL RGB Image, matched_zip_path_or_None)
+    ★ text_color_hex 必須是 '#RRGGBB' 格式，內部用 hex_to_rgba() 轉換。
+      絕對不能直接把 hex 字串傳給 Pillow fill= —— 那會讓 RGBA 模式靜默出錯，畫面全黑！
+    """
     card_img = None
     matched  = None
     raw_name = str(row.get('Image_Name', '')).strip()
@@ -147,68 +198,72 @@ def generate_card_image(row, zip_file, zip_index, font_content, font_source,
     except Exception:
         card_img = None
 
-    # 找不到底圖 → 米灰色（絕對不是黑色）
+    # 找不到底圖 → 米灰色預設背景
     if card_img is None:
         card_img = Image.new("RGBA", (1000, 1000), (220, 217, 210, 255))
 
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
-    draw     = ImageDraw.Draw(card_img, "RGBA")
+    draw = ImageDraw.Draw(card_img, "RGBA")
 
+    # 遮罩
     if bg_darkness > 0:
         draw.rectangle([0, 0, 1000, 1000], fill=(0, 0, 0, int(255 * bg_darkness)))
 
-    fill_main   = hex_to_rgba(text_color, 255)
-    fill_shadow = (0, 0, 0, 200)
+    # ★ 關鍵修正：hex → RGBA tuple，Pillow RGBA 模式必須用 tuple
+    fill_main   = hex_to_rgba(text_color_hex, 255)
+    fill_shadow = (0, 0, 0, 180)
 
+    # 正文
     content_text = str(row.get('Content', '')).replace(" ", "")
-    lines = text_wrap(content_text, font_content, 800, draw)
+    lines = text_wrap(content_text, font_c, 800, draw)
 
-    bbox_h  = draw.textbbox((0, 0), "高", font=font_content)
-    lh      = (bbox_h[3] - bbox_h[1]) * 1.5
+    bh     = draw.textbbox((0, 0), "高", font=font_c)
+    lh     = (bh[3] - bh[1]) * 1.5
     start_y = (1000 - len(lines) * lh) / 2 - 30
 
     for i, line in enumerate(lines):
-        bx = draw.textbbox((0, 0), line, font=font_content)
+        bx = draw.textbbox((0, 0), line, font=font_c)
         x  = (1000 - (bx[2] - bx[0])) / 2
         y  = start_y + i * lh
-        draw.text((x+2, y+2), line, fill=fill_shadow, font=font_content)
-        draw.text((x,   y  ), line, fill=fill_main,   font=font_content)
+        draw.text((x+2, y+2), line, fill=fill_shadow, font=font_c)
+        draw.text((x,   y  ), line, fill=fill_main,   font=font_c)
 
+    # 出處
     source_text = str(row.get('Source', ''))
     if source_text and source_text != "nan":
-        bs = draw.textbbox((0, 0), source_text, font=font_source)
+        bs = draw.textbbox((0, 0), source_text, font=font_s)
         xs = 1000 - (bs[2] - bs[0]) - 80
         ys = 880
-        draw.text((xs+1, ys+1), source_text, fill=fill_shadow, font=font_source)
-        draw.text((xs,   ys  ), source_text, fill=fill_main,   font=font_source)
+        draw.text((xs+1, ys+1), source_text, fill=fill_shadow, font=font_s)
+        draw.text((xs,   ys  ), source_text, fill=fill_main,   font=font_s)
 
     return card_img.convert("RGB"), matched
 
 
-# ── 診斷區塊 ────────────────────────────────────────────────
+# ── 診斷 ──────────────────────────────────────────────────────
 
 if uploaded_csv and uploaded_zip:
 
-    with st.expander("🔍 診斷：查看 ZIP 內容 & 前 10 筆配對結果（建議先執行確認）", expanded=False):
+    with st.expander("🔍 診斷：查看 ZIP 內容 & 前 10 筆配對（建議先確認再正式排版）",
+                     expanded=False):
         if st.button("執行診斷（不生成 PDF）"):
-            df_d  = pd.read_csv(uploaded_csv)
-            zf_d  = zipfile.ZipFile(uploaded_zip)
+            df_d = pd.read_csv(uploaded_csv)
+            zf_d = zipfile.ZipFile(uploaded_zip)
             idx_d, paths_d = build_zip_index(zf_d)
 
-            st.write(f"**ZIP 合法圖片數：** {len(paths_d)}")
-            st.write("**ZIP 前 20 個圖片路徑：**")
+            st.write(f"**ZIP 合法圖片數：{len(paths_d)}**")
+            st.write("ZIP 前 20 個圖片路徑：")
             st.code("\n".join(paths_d[:20]))
 
-            st.write("**CSV 前 10 筆 Image_Name 配對結果：**")
             rows_out = []
             for _, r in df_d.head(10).iterrows():
                 raw = str(r.get('Image_Name', ''))
                 hit = find_in_index(raw, idx_d)
                 rows_out.append({"Image_Name (CSV)": raw,
-                                 "配對到的 ZIP 路徑": hit or "❌ 找不到"})
+                                 "配對到的 ZIP 路徑": hit or "❌ 找不到（CSV 資料有誤）"})
+            st.write("**前 10 筆配對結果：**")
             st.table(pd.DataFrame(rows_out))
 
-            # 顯示第一張配對圖預覽
             for _, r in df_d.iterrows():
                 raw = str(r.get('Image_Name', ''))
                 hit = find_in_index(raw, idx_d)
@@ -219,7 +274,7 @@ if uploaded_csv and uploaded_zip:
                         st.error(f"圖片讀取失敗：{e}")
                     break
 
-    # ── 正式生成 ─────────────────────────────────────────────
+    # ── 正式生成 ──────────────────────────────────────────────
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
         with st.spinner("正在安全建構 A4 2x3 排版..."):
             df       = pd.read_csv(uploaded_csv)
@@ -230,81 +285,81 @@ if uploaded_csv and uploaded_zip:
             font_c, font_s = load_fonts(font_mode, uploaded_font,
                                         font_size_content, font_size_source)
 
-            pdf_buffer = io.BytesIO()
-            c          = canvas.Canvas(pdf_buffer, pagesize=A4)
-            cur_page   = Image.new("RGB", (840, 1188), (255, 255, 255))
-            pg_draw    = ImageDraw.Draw(cur_page)
+            pdf_buf  = io.BytesIO()
+            c        = canvas.Canvas(pdf_buf, pagesize=A4)
+            cur_page = Image.new("RGB", (840, 1188), (255, 255, 255))
+            pg_draw  = ImageDraw.Draw(cur_page)
 
             margin_x, margin_y = 10, 15
-            card_w, card_h     = 95, 89
-            total_cards        = len(df)
-            progress_bar       = st.progress(0)
-            temp_previews      = []
+            card_w,   card_h   = 95, 89
+            total              = len(df)
+            pbar               = st.progress(0)
+            previews           = []
             miss_list          = []
 
-            for index, row in df.iterrows():
+            for idx, row in df.iterrows():
                 card_pil, matched_path = generate_card_image(
-                    row, zip_file, zip_index, font_c, font_s, bg_darkness, text_color
+                    row, zip_file, zip_index, font_c, font_s,
+                    bg_darkness, text_color          # ← 傳 hex 字串，函式內轉 tuple
                 )
                 if not matched_path:
-                    miss_list.append(str(row.get('Image_Name', index)))
+                    miss_list.append(str(row.get('Image_Name', idx)))
 
-                grid_idx = index % 6
-                col_i    = grid_idx % 2
-                row_i    = grid_idx // 2
+                gi    = idx % 6
+                col_i = gi % 2
+                row_i = gi // 2
 
-                x_pdf = (margin_x + col_i * card_w) * mm
-                y_pdf = (297 - margin_y - (row_i + 1) * card_h) * mm
+                xp = (margin_x + col_i * card_w) * mm
+                yp = (297 - margin_y - (row_i + 1) * card_h) * mm
 
                 buf = io.BytesIO()
                 card_pil.save(buf, format='JPEG', quality=85)
                 buf.seek(0)
-                c.drawImage(canvas.ImageReader(buf), x_pdf, y_pdf,
+                c.drawImage(canvas.ImageReader(buf), xp, yp,
                             width=card_w * mm, height=card_h * mm)
 
                 if show_cut_lines:
                     c.setStrokeColorRGB(0.7, 0.7, 0.7)
                     c.setLineWidth(0.3)
-                    c.rect(x_pdf, y_pdf, card_w * mm, card_h * mm)
+                    c.rect(xp, yp, card_w * mm, card_h * mm)
 
-                x_img   = int((margin_x + col_i * card_w) * 4)
-                y_img   = int((margin_y + row_i  * card_h) * 4)
-                resized = card_pil.resize((card_w * 4, card_h * 4),
-                                          resample=Image.Resampling.BILINEAR)
-                cur_page.paste(resized, (x_img, y_img))
-
+                xi = int((margin_x + col_i * card_w) * 4)
+                yi = int((margin_y + row_i  * card_h) * 4)
+                cur_page.paste(
+                    card_pil.resize((card_w*4, card_h*4),
+                                    resample=Image.Resampling.BILINEAR),
+                    (xi, yi)
+                )
                 if show_cut_lines:
-                    pg_draw.rectangle(
-                        [x_img, y_img, x_img + card_w*4, y_img + card_h*4],
-                        outline=(180, 180, 180), width=1
-                    )
+                    pg_draw.rectangle([xi, yi, xi+card_w*4, yi+card_h*4],
+                                      outline=(180, 180, 180), width=1)
 
-                progress_bar.progress((index + 1) / total_cards)
+                pbar.progress((idx + 1) / total)
 
-                if grid_idx == 5 or index == total_cards - 1:
+                if gi == 5 or idx == total - 1:
                     c.showPage()
                     prev = cur_page.resize((420, 594), resample=Image.Resampling.BILINEAR)
-                    b2   = io.BytesIO()
+                    b2 = io.BytesIO()
                     prev.save(b2, format="JPEG", quality=70)
-                    temp_previews.append(b2.getvalue())
+                    previews.append(b2.getvalue())
                     cur_page = Image.new("RGB", (840, 1188), (255, 255, 255))
                     pg_draw  = ImageDraw.Draw(cur_page)
 
             c.save()
-            pdf_buffer.seek(0)
+            pdf_buf.seek(0)
 
-            st.session_state.pdf_data           = pdf_buffer.getvalue()
-            st.session_state.preview_bytes_list  = temp_previews
+            st.session_state.pdf_data            = pdf_buf.getvalue()
+            st.session_state.preview_bytes_list  = previews
             st.session_state.last_params         = sidebar_params.copy()
 
             if miss_list:
                 st.warning(
-                    f"⚠️ {len(miss_list)} 筆找不到對應底圖（已用米灰色取代）：\n"
-                    + "、".join(miss_list[:20])
+                    f"⚠️ {len(miss_list)} 筆找不到對應底圖（米灰色取代）：\n"
+                    + "、".join(miss_list[:30])
                 )
-            st.success(f"🎉 完成！共生成 {len(temp_previews)} 頁 A4 排版。")
+            st.success(f"🎉 完成！共生成 {len(previews)} 頁 A4 排版。")
 
-# ── 結果顯示 ─────────────────────────────────────────────────
+# ── 結果顯示 ──────────────────────────────────────────────────
 
 if st.session_state.pdf_data and st.session_state.preview_bytes_list:
     st.write("---")
