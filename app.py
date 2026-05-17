@@ -10,8 +10,8 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 
-st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器 (優化輕量版)")
-st.write("已全面優化記憶體控制，支援大量卡片安全生成不崩潰。")
+st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器 (底圖修正完美版)")
+st.write("已修正背景圖顯示邏輯，完美保留原始素材底圖，並兼顧記憶體輕量化。")
 
 # --- 側邊欄 ---
 st.sidebar.header("🎨 小卡視覺調整面板")
@@ -23,7 +23,7 @@ if font_mode == "自行從電腦上傳 TTF":
 font_size_content = st.sidebar.slider("正文字型大小", 20, 60, 38, step=2)
 font_size_source = st.sidebar.slider("出處字型大小", 14, 40, 22, step=2)
 text_color = st.sidebar.color_picker("文字顏色", "#FFFFFF")
-bg_darkness = st.sidebar.slider("背景遮罩黯淡度", 0.0, 1.0, 0.3, step=0.05)
+bg_darkness = st.sidebar.slider("背景遮罩黯淡度 (讓白字更清晰)", 0.0, 1.0, 0.3, step=0.05)
 show_cut_lines = st.sidebar.checkbox("顯示 A4 裁切虛線", value=True)
 
 # --- 主畫面 ---
@@ -64,9 +64,10 @@ def generate_card_image(row, zip_file, font_content, font_source, bg_darkness, t
     
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
     
+    # 修正：使用真正的半透明黑底遮罩，不破壞原圖結構
     if bg_darkness > 0:
-        dark = Image.new("RGB", card_img.size, (0, 0, 0))
-        card_img = Image.blend(card_img, dark, bg_darkness)
+        overlay = Image.new("RGBA", card_img.size, (0, 0, 0, int(255 * bg_darkness)))
+        card_img = Image.alpha_composite(card_img.convert("RGBA"), overlay).convert("RGB")
         
     draw = ImageDraw.Draw(card_img)
     max_text_width = 800
@@ -81,19 +82,24 @@ def generate_card_image(row, zip_file, font_content, font_source, bg_darkness, t
         bbox = draw.textbbox((0, 0), line, font=font_content)
         x = (1000 - (bbox[2] - bbox[0])) / 2
         y = start_y + (i * line_height)
+        # 文字黑色陰影
         draw.text((x+2, y+2), line, fill="#000000", font=font_content)
+        # 文字主色
         draw.text((x, y), line, fill=text_color, font=font_content)
         
     source_text = str(row['Source'])
     if source_text and source_text != "nan":
         bbox_s = draw.textbbox((0, 0), source_text, font=font_source)
-        draw.text((1000 - (bbox_s[2] - bbox_s[0]) - 80, 880), source_text, fill=text_color, font=font_source)
+        x_s = 1000 - (bbox_s[2] - bbox_s[0]) - 80
+        y_s = 880
+        draw.text((x_s+1, y_s+1), source_text, fill="#000000", font=font_source)
+        draw.text((x_s, y_s), source_text, fill=text_color, font=font_source)
         
     return card_img
 
 if uploaded_csv and uploaded_zip:
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
-        with st.spinner("正在執行輕量化排版渲染中，請稍候..."):
+        with st.spinner("正在執行完美版排版渲染中，請稍候..."):
             df = pd.read_csv(uploaded_csv)
             zip_file = zipfile.ZipFile(uploaded_zip)
             
@@ -117,7 +123,6 @@ if uploaded_csv and uploaded_zip:
             pdf_buffer = io.BytesIO()
             c = canvas.Canvas(pdf_buffer, pagesize=A4)
             
-            # 預覽圖改為輕量化 4 倍 A4 尺寸 (840 x 1188)
             margin_x, margin_y = 10, 15
             card_w, card_h = 95, 89
             
@@ -140,7 +145,7 @@ if uploaded_csv and uploaded_zip:
                 y_pos_pdf = (297 - margin_y - (row_idx + 1) * card_h) * mm
                 
                 img_byte_arr = io.BytesIO()
-                card_pil.save(img_byte_arr, format='JPEG', quality=85) # 降低品質到 85 減少記憶體壓迫
+                card_pil.save(img_byte_arr, format='JPEG', quality=85)
                 img_byte_arr.seek(0)
                 c.drawImage(canvas.ImageReader(img_byte_arr), x_pos_pdf, y_pos_pdf, width=card_w*mm, height=card_h*mm)
                 
@@ -149,7 +154,7 @@ if uploaded_csv and uploaded_zip:
                     c.setLineWidth(0.3)
                     c.rect(x_pos_pdf, y_pos_pdf, card_w*mm, card_h*mm)
                 
-                # 輕量化預覽圖繪製 (等比例放大 4 倍即可)
+                # 預覽圖繪製
                 x_pos_img = (margin_x + col * card_w) * 4
                 y_pos_img = (margin_y + row_idx * card_h) * 4
                 
@@ -163,12 +168,10 @@ if uploaded_csv and uploaded_zip:
                 
                 if grid_idx == 5 or index == total_cards - 1:
                     c.showPage()
-                    # 關鍵：將 PIL Image 轉換成輕量的位元組儲存，立刻釋放大量的 PIL 記憶體
                     b = io.BytesIO()
                     current_page_img.save(b, format="JPEG", quality=80)
                     temp_preview_bytes.append(b.getvalue())
                     
-                    # 重新初始化下一頁
                     current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
                     page_draw = ImageDraw.Draw(current_page_img)
             
@@ -204,7 +207,6 @@ if uploaded_csv and uploaded_zip:
                 page_select = 1
                 
             st.write(f"📄 當前正在預覽第 **{page_select}** / {total_p} 頁")
-            # 讀取位元組數據並還原成圖片顯示
             st.image(st.session_state.preview_bytes_list[page_select - 1], caption=f"第 {page_select} 頁 A4 實際排版樣貌", use_container_width=True)
 else:
     st.info("💡 請在上方欄位分別拖入 csv 與 zip 素材包，系統就會啟動批次 PDF 排版與即時預覽功能。")
