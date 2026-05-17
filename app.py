@@ -183,7 +183,7 @@ if uploaded_csv and uploaded_zip:
                     c.setDash(2, 2)
                     c.rect(x_pos_pdf, y_pos_pdf, card_w*mm, card_h*mm)
                 
-                # --- 【新增】即時預覽圖繪製邏輯 (起點左上角，放大10倍以保高畫質) ---
+                # --- 即時預覽圖繪製邏輯 (起點左上角，放大10倍以保高畫質) ---
                 x_pos_img = (margin_x + col * card_w) * 10
                 y_pos_img = (margin_y + row_idx * card_h) * 10
                 
@@ -192,8 +192,8 @@ if uploaded_csv and uploaded_zip:
                 current_page_img.paste(resized_card_for_preview, (x_pos_img, y_pos_img))
                 
                 if show_cut_lines:
-                    # 在預覽圖上補上裁切外框
-                    page_draw.rect([x_pos_img, y_pos_img, x_pos_img + card_w*10, y_pos_img + card_h*10], outline=(180, 180, 180), width=3)
+                    # 【已修正】將 page_draw.rect 改為 Pillow 官方標準語法 page_draw.rectangle
+                    page_draw.rectangle([x_pos_img, y_pos_img, x_pos_img + card_w*10, y_pos_img + card_h*10], outline=(180, 180, 180), width=3)
                 
                 progress_bar.progress((index + 1) / total_cards)
                 
