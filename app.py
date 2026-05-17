@@ -11,8 +11,7 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 
-st.title("🍀 創價鼓勵小卡 A4 2x3 產生器 (超強防禦力不崩潰版)")
-st.write("已全面加上錯誤捕捉機制，即使底圖名稱格式極度混亂，也絕不觸發哭臉死機，確保順利產出 PDF。")
+st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
 
 # --- 側邊欄 ---
 st.sidebar.header("🎨 小卡視覺調整面板")
@@ -27,6 +26,16 @@ text_color = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 bg_darkness = st.sidebar.slider("背景遮罩黯淡度 (讓白字更清晰)", 0.0, 1.0, 0.3, step=0.05)
 show_cut_lines = st.sidebar.checkbox("顯示 A4 裁切虛線", value=True)
 
+# 🔧 修復1：把字型設定也存入 session_state 用來比對是否需要重新生成
+sidebar_params = {
+    "font_mode": font_mode,
+    "font_size_content": font_size_content,
+    "font_size_source": font_size_source,
+    "text_color": text_color,
+    "bg_darkness": bg_darkness,
+    "show_cut_lines": show_cut_lines,
+}
+
 # --- 主畫面 ---
 col1, col2 = st.columns(2)
 with col1:
@@ -39,6 +48,13 @@ if "pdf_data" not in st.session_state:
     st.session_state.pdf_data = None
 if "preview_bytes_list" not in st.session_state:
     st.session_state.preview_bytes_list = []
+if "last_params" not in st.session_state:
+    st.session_state.last_params = None
+
+# 🔧 修復1：偵測參數變化，提示用戶重新生成
+if st.session_state.pdf_data and st.session_state.last_params != sidebar_params:
+    st.sidebar.warning("⚠️ 參數已變更，請重新點擊「開始批次排版」以套用新設定。")
+
 
 def text_wrap(text, font, max_width, draw):
     lines = []
@@ -55,68 +71,134 @@ def text_wrap(text, font, max_width, draw):
     if current_line: lines.append(current_line)
     return lines
 
-def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, bg_darkness, text_color):
+
+def build_zip_index(zip_namelist):
+    """
+    🔧 修復2：預先建立 zip 檔案索引，支援多種配對方式：
+    - 純數字配對（有無補零皆可）：231, 001, 1
+    - 完整檔名配對：bg_231.jpg
+    - 不分大小寫
+    回傳 dict: { "231": "path/bg_231.jpg", "bg_231.jpg": "path/bg_231.jpg", ... }
+    """
+    index = {}
+    for name in zip_namelist:
+        # 跳過 macOS 隱藏資料夾與非圖片檔
+        if '__MACOSX' in name or name.startswith('.'):
+            continue
+        ext = os.path.splitext(name)[1].lower()
+        if ext not in ('.jpg', '.jpeg', '.png', '.webp', '.bmp'):
+            continue
+
+        basename = os.path.basename(name)  # e.g. "bg_231.jpg"
+        stem = os.path.splitext(basename)[0]  # e.g. "bg_231"
+
+        # 用完整basename（小寫）當 key
+        index[basename.lower()] = name
+        # 用 stem（小寫）當 key
+        index[stem.lower()] = name
+
+        # 提取所有數字串，每個都當 key（含去除前導零版本）
+        numbers = re.findall(r'\d+', stem)
+        for num in numbers:
+            index[num] = name           # 原始: "231"
+            index[num.lstrip('0') or '0'] = name  # 去前導零: "231" -> "231"（三位數不影響）
+            index[num.zfill(3)] = name  # 補零到3位: "1" -> "001"
+
+    return index
+
+
+def find_image_in_zip(raw_img_name, zip_index):
+    """
+    🔧 修復2：利用預建索引做快速配對，嘗試多種 key 格式
+    """
+    raw = str(raw_img_name).strip()
+
+    # 清除 .0 浮點數尾巴（pandas 讀 CSV 數字欄位時常發生）
+    if raw.endswith('.0'):
+        raw = raw[:-2]
+
+    # 嘗試順序：完整名稱 -> 小寫完整名稱 -> stem -> 數字 -> 補零數字 -> 去零數字
+    candidates = [
+        raw,
+        raw.lower(),
+        os.path.splitext(raw)[0].lower(),  # 去副檔名
+    ]
+
+    # 加入數字候選
+    numbers = re.findall(r'\d+', raw)
+    for num in numbers:
+        candidates.append(num)
+        candidates.append(num.lstrip('0') or '0')
+        candidates.append(num.zfill(3))
+
+    for key in candidates:
+        if key in zip_index:
+            return zip_index[key]
+
+    return None
+
+
+def load_fonts(font_mode, uploaded_font, font_size_content, font_size_source):
+    """🔧 修復1：獨立字型載入函式，每次呼叫都用當前 slider 值建立新字型物件"""
+    font_c, font_s = None, None
+
+    if font_mode == "自行從電腦上傳 TTF" and uploaded_font:
+        font_bytes = io.BytesIO(uploaded_font.read())
+        font_c = ImageFont.truetype(font_bytes, font_size_content)
+        font_bytes.seek(0)
+        font_s = ImageFont.truetype(font_bytes, font_size_source)
+    else:
+        font_paths = ["fonts/芫荽.ttf", "芫荽.ttf"]
+        for p in font_paths:
+            if os.path.exists(p):
+                font_c = ImageFont.truetype(p, font_size_content)
+                font_s = ImageFont.truetype(p, font_size_source)
+                break
+
+    if font_c is None:
+        font_c = ImageFont.load_default()
+        font_s = ImageFont.load_default()
+
+    return font_c, font_s
+
+
+def generate_card_image(row, zip_file, zip_index, font_content, font_source, bg_darkness, text_color):
     card_img = None
-    
-    # 💡 終極防禦：把所有底圖配對邏輯封鎖在 try-except 內，保證就算出錯也絕對不讓系統崩潰
+
     try:
         raw_img_name = str(row['Image_Name']).strip()
-        
-        # 清除可能帶有的 .0 浮點數尾巴
-        if raw_img_name.endswith('.0'):
-            raw_img_name = raw_img_name[:-2]
-            
-        # 提取數字並嘗試補零配對 (如 "1" -> "001")
-        numbers = re.findall(r'\d+', raw_img_name)
-        matched_path = None
-        
-        if numbers:
-            target_num_str = numbers[0].zfill(3)
-            for name in zip_namelist:
-                if target_num_str in name:
-                    matched_path = name
-                    break
-        
-        # 後備配對：如果數字找不到，用直接包含配對
-        if not matched_path:
-            for name in zip_namelist:
-                if raw_img_name in name:
-                    matched_path = name
-                    break
+        matched_path = find_image_in_zip(raw_img_name, zip_index)
 
         if matched_path:
             img_data = zip_file.read(matched_path)
             card_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
     except Exception as e:
-        # 如果上方任何一行配對邏輯噴錯，不崩潰，維持 card_img = None 往下走
         card_img = None
 
-    # 若找不到底圖，或配對過程中噴錯，使用舒適的米灰色作為防禦底色
     if card_img is None:
         card_img = Image.new("RGBA", (1000, 1000), (220, 217, 210, 255))
-    
+
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
     draw = ImageDraw.Draw(card_img, "RGBA")
-    
-    # 繪製半透明黯淡遮罩
+
     if bg_darkness > 0:
         draw.rectangle([0, 0, 1000, 1000], fill=(0, 0, 0, int(255 * bg_darkness)))
-        
+
     max_text_width = 800
     content_text = str(row['Content']).replace(" ", "")
     lines = text_wrap(content_text, font_content, max_text_width, draw)
-    
+
     sample_bbox = draw.textbbox((0, 0), "高", font=font_content)
     line_height = (sample_bbox[3] - sample_bbox[1]) * 1.5
     start_y = (1000 - (len(lines) * line_height)) / 2 - 30
-    
+
     for i, line in enumerate(lines):
         bbox = draw.textbbox((0, 0), line, font=font_content)
         x = (1000 - (bbox[2] - bbox[0])) / 2
         y = start_y + (i * line_height)
-        draw.text((x+2, y+2), line, fill=(0, 0, 0, 255), font=font_content) # 陰影
-        draw.text((x, y), line, fill=text_color, font=font_content) # 主色
-        
+        draw.text((x+2, y+2), line, fill=(0, 0, 0, 255), font=font_content)
+        draw.text((x, y), line, fill=text_color, font=font_content)
+
     source_text = str(row['Source'])
     if source_text and source_text != "nan":
         bbox_s = draw.textbbox((0, 0), source_text, font=font_source)
@@ -124,99 +206,109 @@ def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, 
         y_s = 880
         draw.text((x_s+1, y_s+1), source_text, fill=(0, 0, 0, 255), font=font_source)
         draw.text((x_s, y_s), source_text, fill=text_color, font=font_source)
-        
+
     return card_img.convert("RGB")
+
 
 if uploaded_csv and uploaded_zip:
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
         with st.spinner("正在安全建構 A4 2x3 排版..."):
             df = pd.read_csv(uploaded_csv)
             zip_file = zipfile.ZipFile(uploaded_zip)
-            zip_namelist = [n for n in zip_file.namelist() if not n.endswith('/')]
-            
-            font_c, font_s = None, None
-            if font_mode == "自行從電腦上傳 TTF" and uploaded_font:
-                font_bytes = io.BytesIO(uploaded_font.read())
-                font_c = ImageFont.truetype(font_bytes, font_size_content)
-                font_bytes.seek(0)
-                font_s = ImageFont.truetype(font_bytes, font_size_source)
-            else:
-                font_paths = ["fonts/芫荽.ttf", "芫荽.ttf"]
-                for p in font_paths:
-                    if os.path.exists(p):
-                        font_c = ImageFont.truetype(p, font_size_content)
-                        font_s = ImageFont.truetype(p, font_size_source)
-                        break
-                if font_c is None:
-                    font_c = ImageFont.load_default()
-                    font_s = ImageFont.load_default()
+            zip_namelist = zip_file.namelist()
+
+            # 🔧 修復2：預建索引
+            zip_index = build_zip_index(zip_namelist)
+
+            # 🔧 偵錯用：在側邊欄顯示 zip 內容摘要（可選）
+            image_files_in_zip = [k for k in zip_index.values()]
+            unique_images = list(dict.fromkeys(image_files_in_zip))  # 去重保序
+            st.sidebar.caption(f"📦 ZIP 內偵測到 {len(unique_images)} 張圖片")
+
+            # 🔧 修復1：每次按按鈕都用當前 slider 值重新載入字型
+            font_c, font_s = load_fonts(font_mode, uploaded_font, font_size_content, font_size_source)
 
             pdf_buffer = io.BytesIO()
             c = canvas.Canvas(pdf_buffer, pagesize=A4)
-            
+
             current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
             page_draw = ImageDraw.Draw(current_page_img)
-            
+
             margin_x, margin_y = 10, 15
             card_w, card_h = 95, 89
-            
+
             total_cards = len(df)
             progress_bar = st.progress(0)
             temp_preview_bytes = []
 
+            miss_count = 0  # 🔧 統計找不到底圖的卡片數
+
             for index, row in df.iterrows():
-                card_pil = generate_card_image(row, zip_file, zip_namelist, font_c, font_s, bg_darkness, text_color)
-                
+                # 🔧 修復2：傳入 zip_index 而非 zip_namelist
+                card_pil = generate_card_image(
+                    row, zip_file, zip_index, font_c, font_s, bg_darkness, text_color
+                )
+
                 grid_idx = index % 6
                 col = grid_idx % 2
                 row_idx = grid_idx // 2
-                
+
                 x_pos_pdf = (margin_x + col * card_w) * mm
                 y_pos_pdf = (297 - margin_y - (row_idx + 1) * card_h) * mm
-                
+
                 img_byte_arr = io.BytesIO()
                 card_pil.save(img_byte_arr, format='JPEG', quality=85)
                 img_byte_arr.seek(0)
-                c.drawImage(canvas.ImageReader(img_byte_arr), x_pos_pdf, y_pos_pdf, width=card_w*mm, height=card_h*mm)
-                
+                c.drawImage(canvas.ImageReader(img_byte_arr), x_pos_pdf, y_pos_pdf,
+                            width=card_w*mm, height=card_h*mm)
+
                 if show_cut_lines:
                     c.setStrokeColorRGB(0.7, 0.7, 0.7)
                     c.setLineWidth(0.3)
                     c.rect(x_pos_pdf, y_pos_pdf, card_w*mm, card_h*mm)
-                
+
                 x_pos_img = int((margin_x + col * card_w) * 4)
                 y_pos_img = int((margin_y + row_idx * card_h) * 4)
-                
-                resized_preview_card = card_pil.resize((card_w * 4, card_h * 4), resample=Image.Resampling.BILINEAR)
+
+                resized_preview_card = card_pil.resize((card_w * 4, card_h * 4),
+                                                        resample=Image.Resampling.BILINEAR)
                 current_page_img.paste(resized_preview_card, (x_pos_img, y_pos_img))
-                
+
                 if show_cut_lines:
-                    page_draw.rectangle([x_pos_img, y_pos_img, x_pos_img + card_w*4, y_pos_img + card_h*4], outline=(180, 180, 180), width=1)
-                
+                    page_draw.rectangle(
+                        [x_pos_img, y_pos_img, x_pos_img + card_w*4, y_pos_img + card_h*4],
+                        outline=(180, 180, 180), width=1
+                    )
+
                 progress_bar.progress((index + 1) / total_cards)
-                
+
                 if grid_idx == 5 or index == total_cards - 1:
                     c.showPage()
-                    
-                    preview_opt = current_page_img.resize((420, 594), resample=Image.Resampling.BILINEAR)
+                    preview_opt = current_page_img.resize((420, 594),
+                                                           resample=Image.Resampling.BILINEAR)
                     b = io.BytesIO()
                     preview_opt.save(b, format="JPEG", quality=70)
                     temp_preview_bytes.append(b.getvalue())
-                    
+
                     current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
                     page_draw = ImageDraw.Draw(current_page_img)
-            
+
             c.save()
             pdf_buffer.seek(0)
-            
+
+            # 🔧 修復1：記錄本次生成時的參數
             st.session_state.pdf_data = pdf_buffer.getvalue()
             st.session_state.preview_bytes_list = temp_preview_bytes
-            st.success(f"🎉 2x3 A4 整頁預覽建構完成！共生成 {len(temp_preview_bytes)} 頁 A4 排版。")
+            st.session_state.last_params = sidebar_params.copy()
+
+            st.success(
+                f"🎉 2x3 A4 整頁預覽建構完成！共生成 {len(temp_preview_bytes)} 頁 A4 排版。"
+            )
 
     if st.session_state.pdf_data and st.session_state.preview_bytes_list:
         st.write("---")
         col_dl, col_view = st.columns([1, 2])
-        
+
         with col_dl:
             st.subheader("📥 檔案下載")
             st.download_button(
@@ -227,17 +319,21 @@ if uploaded_csv and uploaded_zip:
                 type="primary"
             )
             st.info("💡 溫馨提醒：列印 PDF 時請將印表機設定為「實際大小(100%)」或「不縮放」，裁切線才會最準確喔！")
-            
+
         with col_view:
             st.subheader("👀 A4 2x3 實際排版整頁預覽")
             total_p = len(st.session_state.preview_bytes_list)
-            
+
             if total_p > 1:
                 page_select = st.slider("切換預覽頁數", 1, total_p, 1)
             else:
                 page_select = 1
-                
+
             st.write(f"📄 當前正在預覽第 **{page_select}** / {total_p} 頁 (每頁包含 6 張小卡)")
-            st.image(st.session_state.preview_bytes_list[page_select - 1], caption=f"第 {page_select} 頁 A4 實印排版樣貌", use_container_width=True)
+            st.image(
+                st.session_state.preview_bytes_list[page_select - 1],
+                caption=f"第 {page_select} 頁 A4 實印排版樣貌",
+                use_container_width=True
+            )
 else:
     st.info("💡 請在上方欄位分別拖入 csv 與 zip 素材包，系統就會啟動批次 PDF 排版與整頁預覽功能。")
