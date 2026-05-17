@@ -10,8 +10,8 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 
-st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器 (終極流暢版)")
-st.write("已將圖層混合優化為高效能畫布渲染，徹底解決超時與崩潰問題。")
+st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器 (檔名模糊智慧配對版)")
+st.write("已加入檔名模糊匹配機制（例如表格寫 001.jpg 可自動配對 bg_001.jpg），徹底解決底圖不顯示問題。")
 
 # --- 側邊欄 ---
 st.sidebar.header("🎨 小卡視覺調整面板")
@@ -54,18 +54,39 @@ def text_wrap(text, font, max_width, draw):
     if current_line: lines.append(current_line)
     return lines
 
-def generate_card_image(row, zip_file, font_content, font_source, bg_darkness, text_color):
-    img_name = f"images/{row['Image_Name']}"
-    try:
-        img_data = zip_file.read(img_name)
-        card_img = Image.open(io.BytesIO(img_data)).convert("RGBA") # 轉 RGBA 以便直接畫半透明遮罩
-    except:
+def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, bg_darkness, text_color):
+    target_name = str(row['Image_Name']).strip()
+    img_data = None
+    matched_path = None
+    
+    # 💡 終極模糊匹配：先找完美結尾，找不到就改用關鍵字包含搜尋
+    for name in zip_namelist:
+        if name.endswith(target_name):
+            matched_path = name
+            break
+            
+    if not matched_path:
+        # 比如 target_name 是 "001.jpg"，而 ZIP 裡叫 "bg_001.jpg"
+        for name in zip_namelist:
+            if target_name in name:
+                matched_path = name
+                break
+
+    if matched_path:
+        try:
+            img_data = zip_file.read(matched_path)
+            card_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
+        except:
+            img_data = None
+
+    # 如果還是徹底找不到，用溫和的粉米色打底防禦，絕對不給黑底
+    if img_data is None:
         card_img = Image.new("RGBA", (1000, 1000), (245, 242, 235, 255))
     
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
-    
-    # 💡 超流暢優化：直接用 Draw 畫半透明矩形，速度提升 10 倍且不吃記憶體！
     draw = ImageDraw.Draw(card_img, "RGBA")
+    
+    # 畫半透明遮罩
     if bg_darkness > 0:
         draw.rectangle([0, 0, 1000, 1000], fill=(0, 0, 0, int(255 * bg_darkness)))
         
@@ -94,13 +115,14 @@ def generate_card_image(row, zip_file, font_content, font_source, bg_darkness, t
         draw.text((x_s+1, y_s+1), source_text, fill=(0, 0, 0, 255), font=font_source)
         draw.text((x_s, y_s), source_text, fill=text_color, font=font_source)
         
-    return card_img.convert("RGB") # 轉回 RGB 供後續存檔
+    return card_img.convert("RGB")
 
 if uploaded_csv and uploaded_zip:
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
-        with st.spinner("正在執行高流暢度排版渲染中，請稍候..."):
+        with st.spinner("正在進行智慧檔名匹配並讀取素材底圖中..."):
             df = pd.read_csv(uploaded_csv)
             zip_file = zipfile.ZipFile(uploaded_zip)
+            zip_namelist = [n for n in zip_file.namelist() if not n.endswith('/')] # 排除資料夾路徑，只留檔案
             
             font_c, font_s = None, None
             if font_mode == "自行從電腦上傳 TTF" and uploaded_font:
@@ -133,7 +155,7 @@ if uploaded_csv and uploaded_zip:
             temp_preview_bytes = []
 
             for index, row in df.iterrows():
-                card_pil = generate_card_image(row, zip_file, font_c, font_s, bg_darkness, text_color)
+                card_pil = generate_card_image(row, zip_file, zip_namelist, font_c, font_s, bg_darkness, text_color)
                 
                 grid_idx = index % 6
                 col = grid_idx % 2
@@ -168,7 +190,7 @@ if uploaded_csv and uploaded_zip:
                 if grid_idx == 5 or index == total_cards - 1:
                     c.showPage()
                     b = io.BytesIO()
-                    card_pil.save(b, format="JPEG", quality=75) # 進一步優化預覽存檔體積
+                    current_page_img.save(b, format="JPEG", quality=75)
                     temp_preview_bytes.append(b.getvalue())
                     
                     current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
@@ -179,7 +201,7 @@ if uploaded_csv and uploaded_zip:
             
             st.session_state.pdf_data = pdf_buffer.getvalue()
             st.session_state.preview_bytes_list = temp_preview_bytes
-            st.success(f"🎉 完美排版完成！共生成 {len(temp_preview_bytes)} 頁 A4 排版。")
+            st.success(f"🎉 智慧模糊配對排版完成！共生成 {len(temp_preview_bytes)} 頁 A4 排版。")
 
     if st.session_state.pdf_data and st.session_state.preview_bytes_list:
         st.write("---")
