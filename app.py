@@ -154,7 +154,6 @@ def load_fonts(font_mode, uploaded_font, size_content, size_source):
 
 
 def generate_card_image(row, zf, zip_index, font_c, font_s, bg_darkness, text_color_hex):
-    # 1. 載入底圖（全程 RGB，不用 RGBA）
     card_img = None
     matched  = None
     raw_name = str(row.get('Image_Name', '')).strip()
@@ -171,13 +170,12 @@ def generate_card_image(row, zf, zip_index, font_c, font_s, bg_darkness, text_co
 
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
 
-    # 2. 遮罩：paste + L mask（最可靠，不用 RGBA draw）
+    # 遮罩：paste + L mask（不用 RGBA draw，避免 Pillow alpha 合成問題）
     if bg_darkness > 0:
         black  = Image.new("RGB", (1000, 1000), (0, 0, 0))
         mask_l = Image.new("L",   (1000, 1000), int(255 * bg_darkness))
         card_img.paste(black, (0, 0), mask_l)
 
-    # 3. 畫文字（RGB 模式，fill 直接用 tuple）
     draw        = ImageDraw.Draw(card_img)
     fill_main   = hex_to_rgb(text_color_hex)
     fill_shadow = (0, 0, 0)
@@ -345,11 +343,10 @@ if st.session_state.pdf_data and st.session_state.preview_bytes_list:
         total_p     = len(st.session_state.preview_bytes_list)
         page_select = st.slider("切換預覽頁數", 1, total_p, 1) if total_p > 1 else 1
         st.write(f"📄 第 **{page_select}** / {total_p} 頁（每頁 6 張小卡）")
-        # ★ 用 width='stretch' 取代已棄用的 use_container_width=True
+        # ★ 不傳 width 參數，讓圖片自動填滿欄位（Streamlit 1.57 相容寫法）
         st.image(
             st.session_state.preview_bytes_list[page_select - 1],
             caption=f"第 {page_select} 頁 A4 實印排版",
-            width="stretch",
         )
 
 elif not (uploaded_csv and uploaded_zip):
