@@ -11,8 +11,8 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 
-st.title("🍀 創價鼓勵小卡 A4 2x3 產生器 (檔名數字精準補零版)")
-st.write("已修正預覽圖與底圖匹配機制，強制進行數字標準化配對，確保彩色背景順利讀取。")
+st.title("🍀 創價鼓勵小卡 A4 2x3 產生器 (超強防禦力不崩潰版)")
+st.write("已全面加上錯誤捕捉機制，即使底圖名稱格式極度混亂，也絕不觸發哭臉死機，確保順利產出 PDF。")
 
 # --- 側邊欄 ---
 st.sidebar.header("🎨 小卡視覺調整面板")
@@ -56,46 +56,44 @@ def text_wrap(text, font, max_width, draw):
     return lines
 
 def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, bg_darkness, text_color):
-    # 💡 核心修正：將 CSV 裡各種亂七八糟的檔名格式（如 1, 1.0, 001.jpg）通通清洗提取出數字
-    raw_img_name = str(row['Image_Name']).strip()
+    card_img = None
     
-    # 清除可能帶有的 .0 浮點數尾巴
-    if raw_img_name.endswith('.0'):
-        raw_img_name = raw_img_name[:-2]
+    # 💡 終極防禦：把所有底圖配對邏輯封鎖在 try-except 內，保證就算出錯也絕對不讓系統崩潰
+    try:
+        raw_img_name = str(row['Image_Name']).strip()
         
-    # 提取裡面的所有數字
-    numbers = re.findall(r'\d+', raw_img_name)
-    
-    matched_path = None
-    if numbers:
-        # 將數字標準化為三位數補零，例如 "1" -> "001"
-        target_num_str = numbers[0].zfill(3)
+        # 清除可能帶有的 .0 浮點數尾巴
+        if raw_img_name.endswith('.0'):
+            raw_img_name = raw_img_name[:-2]
+            
+        # 提取數字並嘗試補零配對 (如 "1" -> "001")
+        numbers = re.findall(r'\d+', raw_img_name)
+        matched_path = None
         
-        # 去 ZIP 檔名清單裡找有沒有包含 "_001" 或 "001" 的圖片
-        for name in zip_namelist:
-            # 同時檢查是否包含這個補零數字字串，且必須是檔案
-            if target_num_str in name:
-                matched_path = name
-                break
-    
-    # 如果用數字找不到，改用傳統的文字包含配對當作保險
-    if not matched_path:
-        for name in zip_namelist:
-            if raw_img_name in name:
-                matched_path = name
-                break
+        if numbers:
+            target_num_str = numbers[0].zfill(3)
+            for name in zip_namelist:
+                if target_num_str in name:
+                    matched_path = name
+                    break
+        
+        # 後備配對：如果數字找不到，用直接包含配對
+        if not matched_path:
+            for name in zip_namelist:
+                if raw_img_name in name:
+                    matched_path = name
+                    break
 
-    img_data = None
-    if matched_path:
-        try:
+        if matched_path:
             img_data = zip_file.read(matched_path)
             card_img = Image.open(io.BytesIO(img_data)).convert("RGBA")
-        except:
-            img_data = None
+    except Exception as e:
+        # 如果上方任何一行配對邏輯噴錯，不崩潰，維持 card_img = None 往下走
+        card_img = None
 
-    # 若真的連防禦搜尋都找不到，使用粉米色，堅決不用全黑，避免文字隱形
-    if img_data is None:
-        card_img = Image.new("RGBA", (1000, 1000), (245, 242, 235, 255))
+    # 若找不到底圖，或配對過程中噴錯，使用舒適的米灰色作為防禦底色
+    if card_img is None:
+        card_img = Image.new("RGBA", (1000, 1000), (220, 217, 210, 255))
     
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
     draw = ImageDraw.Draw(card_img, "RGBA")
@@ -131,7 +129,7 @@ def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, 
 
 if uploaded_csv and uploaded_zip:
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
-        with st.spinner("正在執行數字重組配對並建立 A4 2x3 排版..."):
+        with st.spinner("正在安全建構 A4 2x3 排版..."):
             df = pd.read_csv(uploaded_csv)
             zip_file = zipfile.ZipFile(uploaded_zip)
             zip_namelist = [n for n in zip_file.namelist() if not n.endswith('/')]
