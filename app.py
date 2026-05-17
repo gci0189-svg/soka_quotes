@@ -10,8 +10,8 @@ from reportlab.lib.units import mm
 
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 
-st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器 (檔名模糊智慧配對版)")
-st.write("已加入檔名模糊匹配機制（例如表格寫 001.jpg 可自動配對 bg_001.jpg），徹底解決底圖不顯示問題。")
+st.title("🍀 創價鼓勵小卡 A4 2x3 批次產生器 (A4整頁預覽+極致輕量版)")
+st.write("已修正預覽圖邏輯，現在可完美顯示「一頁 6 張小卡」的 A4 實際排版，並優化記憶體防止崩潰。")
 
 # --- 側邊欄 ---
 st.sidebar.header("🎨 小卡視覺調整面板")
@@ -59,14 +59,12 @@ def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, 
     img_data = None
     matched_path = None
     
-    # 💡 終極模糊匹配：先找完美結尾，找不到就改用關鍵字包含搜尋
+    # 智慧模糊匹配（解決 bg_ 前綴問題）
     for name in zip_namelist:
         if name.endswith(target_name):
             matched_path = name
             break
-            
     if not matched_path:
-        # 比如 target_name 是 "001.jpg"，而 ZIP 裡叫 "bg_001.jpg"
         for name in zip_namelist:
             if target_name in name:
                 matched_path = name
@@ -79,14 +77,14 @@ def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, 
         except:
             img_data = None
 
-    # 如果還是徹底找不到，用溫和的粉米色打底防禦，絕對不給黑底
+    # 找不到底圖時的防禦米色
     if img_data is None:
         card_img = Image.new("RGBA", (1000, 1000), (245, 242, 235, 255))
     
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
     draw = ImageDraw.Draw(card_img, "RGBA")
     
-    # 畫半透明遮罩
+    # 繪製黯淡遮罩
     if bg_darkness > 0:
         draw.rectangle([0, 0, 1000, 1000], fill=(0, 0, 0, int(255 * bg_darkness)))
         
@@ -102,10 +100,8 @@ def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, 
         bbox = draw.textbbox((0, 0), line, font=font_content)
         x = (1000 - (bbox[2] - bbox[0])) / 2
         y = start_y + (i * line_height)
-        # 文字黑色陰影
-        draw.text((x+2, y+2), line, fill=(0, 0, 0, 255), font=font_content)
-        # 文字主色
-        draw.text((x, y), line, fill=text_color, font=font_content)
+        draw.text((x+2, y+2), line, fill=(0, 0, 0, 255), font=font_content) # 陰影
+        draw.text((x, y), line, fill=text_color, font=font_content) # 主色
         
     source_text = str(row['Source'])
     if source_text and source_text != "nan":
@@ -119,10 +115,10 @@ def generate_card_image(row, zip_file, zip_namelist, font_content, font_source, 
 
 if uploaded_csv and uploaded_zip:
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
-        with st.spinner("正在進行智慧檔名匹配並讀取素材底圖中..."):
+        with st.spinner("正在進行智慧排版並建構 A4 整頁預覽..."):
             df = pd.read_csv(uploaded_csv)
             zip_file = zipfile.ZipFile(uploaded_zip)
-            zip_namelist = [n for n in zip_file.namelist() if not n.endswith('/')] # 排除資料夾路徑，只留檔案
+            zip_namelist = [n for n in zip_file.namelist() if not n.endswith('/')]
             
             font_c, font_s = None, None
             if font_mode == "自行從電腦上傳 TTF" and uploaded_font:
@@ -144,14 +140,15 @@ if uploaded_csv and uploaded_zip:
             pdf_buffer = io.BytesIO()
             c = canvas.Canvas(pdf_buffer, pagesize=A4)
             
+            # 建立大畫布來模擬 A4 輸出 (寬 840, 高 1188)
+            current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
+            page_draw = ImageDraw.Draw(current_page_img)
+            
             margin_x, margin_y = 10, 15
             card_w, card_h = 95, 89
             
             total_cards = len(df)
             progress_bar = st.progress(0)
-            
-            current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
-            page_draw = ImageDraw.Draw(current_page_img)
             temp_preview_bytes = []
 
             for index, row in df.iterrows():
@@ -161,7 +158,7 @@ if uploaded_csv and uploaded_zip:
                 col = grid_idx % 2
                 row_idx = grid_idx // 2
                 
-                # ReportLab PDF 繪製
+                # ReportLab PDF 實體座標繪製
                 x_pos_pdf = (margin_x + col * card_w) * mm
                 y_pos_pdf = (297 - margin_y - (row_idx + 1) * card_h) * mm
                 
@@ -175,9 +172,9 @@ if uploaded_csv and uploaded_zip:
                     c.setLineWidth(0.3)
                     c.rect(x_pos_pdf, y_pos_pdf, card_w*mm, card_h*mm)
                 
-                # 預覽圖繪製
-                x_pos_img = (margin_x + col * card_w) * 4
-                y_pos_img = (margin_y + row_idx * card_h) * 4
+                # 💡 修正預覽邏輯：真正將單卡貼入 A4 大畫布的對應格子中
+                x_pos_img = int((margin_x + col * card_w) * 4)
+                y_pos_img = int((margin_y + row_idx * card_h) * 4)
                 
                 resized_preview_card = card_pil.resize((card_w * 4, card_h * 4), resample=Image.Resampling.BILINEAR)
                 current_page_img.paste(resized_preview_card, (x_pos_img, y_pos_img))
@@ -187,12 +184,17 @@ if uploaded_csv and uploaded_zip:
                 
                 progress_bar.progress((index + 1) / total_cards)
                 
+                # 當滿 6 張或是最後一張時，才將「整頁 A4 畫布」導出並換頁
                 if grid_idx == 5 or index == total_cards - 1:
                     c.showPage()
+                    
+                    # 記憶體優化：將大預覽圖適度縮小，並高壓縮存檔，徹底防範 Streamlit 哭臉
+                    preview_opt = current_page_img.resize((420, 594), resample=Image.Resampling.BILINEAR)
                     b = io.BytesIO()
-                    current_page_img.save(b, format="JPEG", quality=75)
+                    preview_opt.save(b, format="JPEG", quality=70)
                     temp_preview_bytes.append(b.getvalue())
                     
+                    # 清空重置下一頁 A4 畫布
                     current_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
                     page_draw = ImageDraw.Draw(current_page_img)
             
@@ -201,7 +203,7 @@ if uploaded_csv and uploaded_zip:
             
             st.session_state.pdf_data = pdf_buffer.getvalue()
             st.session_state.preview_bytes_list = temp_preview_bytes
-            st.success(f"🎉 智慧模糊配對排版完成！共生成 {len(temp_preview_bytes)} 頁 A4 排版。")
+            st.success(f"🎉 2x3 A4 整頁預覽建構完成！共生成 {len(temp_preview_bytes)} 頁 A4 排版。")
 
     if st.session_state.pdf_data and st.session_state.preview_bytes_list:
         st.write("---")
@@ -219,7 +221,7 @@ if uploaded_csv and uploaded_zip:
             st.info("💡 溫馨提醒：列印 PDF 時請將印表機設定為「實際大小(100%)」或「不縮放」，裁切線才會最準確喔！")
             
         with col_view:
-            st.subheader("👀 A4 每頁排版即時預覽")
+            st.subheader("👀 A4 2x3 實際排版整頁預覽")
             total_p = len(st.session_state.preview_bytes_list)
             
             if total_p > 1:
@@ -227,7 +229,7 @@ if uploaded_csv and uploaded_zip:
             else:
                 page_select = 1
                 
-            st.write(f"📄 當前正在預覽第 **{page_select}** / {total_p} 頁")
-            st.image(st.session_state.preview_bytes_list[page_select - 1], caption=f"第 {page_select} 頁 A4 實際排版樣貌", use_container_width=True)
+            st.write(f"📄 當前正在預覽第 **{page_select}** / {total_p} 頁 (每頁包含 6 張小卡)")
+            st.image(st.session_state.preview_bytes_list[page_select - 1], caption=f"第 {page_select} 頁 A4 實印排版樣貌", use_container_width=True)
 else:
-    st.info("💡 請在上方欄位分別拖入 csv 與 zip 素材包，系統就會啟動批次 PDF 排版與即時預覽功能。")
+    st.info("💡 請在上方欄位分別拖入 csv 與 zip 素材包，系統就會啟動批次 PDF 排版與整頁預覽功能。")
