@@ -29,11 +29,14 @@ text_color        = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🌄 背景設定**")
-bg_darkness   = st.sidebar.slider("背景遮罩黯淡度", 0.0, 1.0, 0.50, step=0.05)
+auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調整）", value=True)
+bg_darkness   = st.sidebar.slider("手動遮罩黯淡度（智能關閉時生效）",
+                                   0.0, 1.0, 0.35, step=0.05,
+                                   disabled=auto_darkness)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
-stroke_width  = st.sidebar.slider("文字描邊寬度（防暈）", 0, 5, 2, step=1)
+stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 5, 2, step=1)
 glow_strength = st.sidebar.slider("文字發光強度（0=關閉）", 0, 8, 3, step=1)
 
 st.sidebar.markdown("---")
@@ -43,6 +46,7 @@ sidebar_params = dict(
     font_mode=font_mode, font_size_content=font_size_content,
     font_size_source=font_size_source, line_spacing=line_spacing,
     text_color=text_color, bg_darkness=bg_darkness,
+    auto_darkness=auto_darkness,
     stroke_width=stroke_width, glow_strength=glow_strength,
     show_cut_lines=show_cut_lines,
 )
@@ -56,8 +60,7 @@ with col2:
 
 for k, v in [("pdf_data", None), ("preview_bytes_list", []),
              ("last_params", None), ("zip_bytes_cache", None),
-             ("csv_cache", None), ("zip_index_cache", None),
-             ("preview_card_bytes", None), ("preview_row_idx", 0)]:
+             ("csv_cache", None), ("zip_index_cache", None)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -66,6 +69,25 @@ for k, v in [("pdf_data", None), ("preview_bytes_list", []),
 def hex_to_rgb(hex_color: str) -> tuple:
     h = hex_color.lstrip('#')
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def smart_darkness(img_rgb: Image.Image, base: float) -> float:
+    """
+    偵測底圖中央文字區域的平均亮度，
+    亮圖自動加深遮罩，暗圖減淺，保留底圖美感。
+    base = 使用者設定的基準值（0~1），智能模式下忽略，改用自動計算。
+    """
+    # 取中央 40% 區域做亮度取樣
+    w, h = img_rgb.size
+    cx1, cy1 = int(w * 0.3), int(h * 0.25)
+    cx2, cy2 = int(w * 0.7), int(h * 0.75)
+    crop = img_rgb.crop((cx1, cy1, cx2, cy2)).convert("L")
+    avg_brightness = sum(crop.getdata()) / (crop.width * crop.height)  # 0~255
+
+    # 亮度映射：亮圖(200+)→遮罩0.50，暗圖(60-)→遮罩0.20，中間線性插值
+    brightness_norm = avg_brightness / 255.0   # 0~1
+    darkness = 0.20 + brightness_norm * 0.35   # 範圍：0.20~0.55
+    return round(min(max(darkness, 0.15), 0.60), 2)
 
 
 def text_wrap(text, font, max_width, draw):
@@ -158,57 +180,40 @@ def load_fonts(font_mode, uploaded_font, size_content, size_source):
     return fc, fs
 
 
-def draw_text_with_glow_stroke(draw, pos, text, font, fill_rgb,
-                                stroke_w=2, glow_str=3, img=None):
-    """
-    專業印刷級文字渲染：
-    1. 發光層（blur 暈染，讓字在任何背景都浮出來）
-    2. 描邊層（深色輪廓，防止細字消失在亮色背景）
-    3. 主色層（乾淨的主文字顏色）
-    不用「重疊陰影」—— 那會讓字模糊、死氣沈沈。
-    """
+def draw_text_pro(draw, pos, text, font, fill_rgb,
+                  stroke_w=2, glow_str=3, img=None):
+    """描邊 + 發光，讓細字在任何背景清晰浮出。"""
     x, y = pos
 
-    # ── 發光層：在底圖上先 blur 一個白色光暈 ──────────────────
+    # 發光層
     if glow_str > 0 and img is not None:
         glow_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
         gd = ImageDraw.Draw(glow_layer)
         r, g, b = fill_rgb
-        # 發光顏色：文字顏色的半透明版
-        gd.text((x, y), text, font=font, fill=(r, g, b, 180))
-        glow_blurred = glow_layer.filter(
-            ImageFilter.GaussianBlur(radius=glow_str)
+        gd.text((x, y), text, font=font, fill=(r, g, b, 160))
+        img.alpha_composite(
+            glow_layer.filter(ImageFilter.GaussianBlur(radius=glow_str))
         )
-        # 把發光層合成到主圖（img 必須是 RGBA）
-        img.alpha_composite(glow_blurred)
 
-    # ── 描邊層：深色輪廓讓字在亮底上不消失 ───────────────────
+    # 描邊層（自動配色）
     if stroke_w > 0:
-        # 計算描邊顏色：文字顏色的互補暗色
         r, g, b = fill_rgb
-        stroke_brightness = (r * 0.299 + g * 0.587 + b * 0.114)
-        if stroke_brightness > 128:
-            stroke_color = (20, 20, 20, 220)   # 亮字 → 深色描邊
-        else:
-            stroke_color = (235, 235, 235, 200) # 暗字 → 淺色描邊
-
+        bright = r * 0.299 + g * 0.587 + b * 0.114
+        sc = (15, 15, 15, 210) if bright > 128 else (240, 240, 240, 190)
         for dx in range(-stroke_w, stroke_w + 1):
             for dy in range(-stroke_w, stroke_w + 1):
-                if dx == 0 and dy == 0:
-                    continue
-                if abs(dx) + abs(dy) <= stroke_w + 1:
-                    draw.text((x + dx, y + dy), text, font=font,
-                              fill=stroke_color)
+                if abs(dx) + abs(dy) <= stroke_w + 1 and not (dx == 0 and dy == 0):
+                    draw.text((x + dx, y + dy), text, font=font, fill=sc)
 
-    # ── 主色層 ────────────────────────────────────────────────
+    # 主色層
     draw.text((x, y), text, font=font,
               fill=(fill_rgb[0], fill_rgb[1], fill_rgb[2], 255))
 
 
 def generate_card_image(row, zf, zip_index, font_c, font_s,
-                        bg_darkness, text_color_hex,
-                        line_spacing_mult, stroke_width, glow_strength):
-    """全程 RGBA，最後輸出 RGB。"""
+                        bg_darkness, auto_darkness_on,
+                        text_color_hex, line_spacing_mult,
+                        stroke_width, glow_strength):
     card_img = None
     matched  = None
     raw_name = str(row.get('Image_Name', '')).strip()
@@ -225,15 +230,19 @@ def generate_card_image(row, zf, zip_index, font_c, font_s,
 
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
 
-    # 遮罩：alpha_composite 正確合成
-    if bg_darkness > 0:
+    # 智能遮罩：依底圖亮度自動計算
+    if auto_darkness_on:
+        actual_darkness = smart_darkness(card_img.convert("RGB"), bg_darkness)
+    else:
+        actual_darkness = bg_darkness
+
+    if actual_darkness > 0:
         overlay = Image.new("RGBA", (1000, 1000),
-                            (0, 0, 0, int(255 * bg_darkness)))
+                            (0, 0, 0, int(255 * actual_darkness)))
         card_img = Image.alpha_composite(card_img, overlay)
 
-    # 畫文字（RGBA 模式，發光需要 RGBA）
-    draw       = ImageDraw.Draw(card_img, "RGBA")
-    fill_rgb   = hex_to_rgb(text_color_hex)
+    draw     = ImageDraw.Draw(card_img, "RGBA")
+    fill_rgb = hex_to_rgb(text_color_hex)
 
     content_text = str(row.get('Content', '')).replace(" ", "")
     lines = text_wrap(content_text, font_c, 820, draw)
@@ -247,39 +256,36 @@ def generate_card_image(row, zf, zip_index, font_c, font_s,
         bx = draw.textbbox((0, 0), line, font=font_c)
         x  = (1000 - (bx[2] - bx[0])) / 2
         y  = start_y + i * lh
-        draw_text_with_glow_stroke(
-            draw, (x, y), line, font_c, fill_rgb,
-            stroke_w=stroke_width, glow_str=glow_strength,
-            img=card_img
-        )
+        draw_text_pro(draw, (x, y), line, font_c, fill_rgb,
+                      stroke_w=stroke_width, glow_str=glow_strength,
+                      img=card_img)
 
     source_text = str(row.get('Source', ''))
     if source_text and source_text != "nan":
         bs = draw.textbbox((0, 0), source_text, font=font_s)
         xs = 1000 - (bs[2] - bs[0]) - 60
         ys = 900
-        draw_text_with_glow_stroke(
-            draw, (xs, ys), source_text, font_s, fill_rgb,
-            stroke_w=max(0, stroke_width - 1),
-            glow_str=max(0, glow_strength - 1),
-            img=card_img
-        )
+        draw_text_pro(draw, (xs, ys), source_text, font_s, fill_rgb,
+                      stroke_w=max(0, stroke_width - 1),
+                      glow_str=max(0, glow_strength - 1),
+                      img=card_img)
 
-    return card_img.convert("RGB"), matched
+    # 顯示實際使用的遮罩值（debug 用）
+    return card_img.convert("RGB"), matched, actual_darkness
 
 
-# ── 快取 zip & csv（檔名不變就不重讀）────────────────────────
+# ── 快取 zip & csv ────────────────────────────────────────────
 if uploaded_csv and uploaded_zip:
     csv_name = uploaded_csv.name
     zip_name = uploaded_zip.name
     if st.session_state.get("_csv_name") != csv_name:
-        st.session_state["_csv_name"]  = csv_name
-        st.session_state.csv_cache     = uploaded_csv.read()
+        st.session_state["_csv_name"] = csv_name
+        st.session_state.csv_cache    = uploaded_csv.read()
     if st.session_state.get("_zip_name") != zip_name:
-        st.session_state["_zip_name"]      = zip_name
-        st.session_state.zip_bytes_cache   = uploaded_zip.read()
+        st.session_state["_zip_name"]    = zip_name
+        st.session_state.zip_bytes_cache = uploaded_zip.read()
         idx, paths, zf_obj = build_zip_index(st.session_state.zip_bytes_cache)
-        st.session_state.zip_index_cache   = (idx, paths, zf_obj)
+        st.session_state.zip_index_cache = (idx, paths, zf_obj)
 
 # ── 診斷 ──────────────────────────────────────────────────────
 if uploaded_csv and uploaded_zip:
@@ -306,43 +312,43 @@ if uploaded_csv and uploaded_zip:
                         st.error(f"圖片讀取失敗：{e}")
                     break
 
-# ── ★ 智能即時單張預覽（slider 動就自動更新）────────────────
+# ── 即時單張預覽（slider 動就自動更新）───────────────────────
 if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
     st.subheader("🖼️ 即時單張預覽")
     st.caption("⚡ 調整左側任何參數，預覽會自動更新，無需手動按鈕。")
 
-    idx_p, _, zf_p   = st.session_state.zip_index_cache
-    df_p             = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
-    max_row          = len(df_p) - 1
+    idx_p, _, zf_p = st.session_state.zip_index_cache
+    df_p           = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
+    max_row        = len(df_p) - 1
 
     prev_col1, prev_col2 = st.columns([1, 2])
     with prev_col1:
         preview_row = st.number_input(
             "預覽第幾筆語錄（0 起算）",
             min_value=0, max_value=max_row, value=0, step=1,
-            key="preview_row_widget"
         )
 
-    # ★ 直接渲染，不需按鈕 —— 每次 rerun（slider 改變）都會重跑
     font_c_p, font_s_p = load_fonts(font_mode, uploaded_font,
                                     font_size_content, font_size_source)
-    row_p   = df_p.iloc[int(preview_row)]
-    card_p, _ = generate_card_image(
+    row_p = df_p.iloc[int(preview_row)]
+    card_p, _, used_darkness = generate_card_image(
         row_p, zf_p, idx_p, font_c_p, font_s_p,
-        bg_darkness, text_color,
-        line_spacing, stroke_width, glow_strength
+        bg_darkness, auto_darkness,
+        text_color, line_spacing, stroke_width, glow_strength
     )
     buf_p = io.BytesIO()
     card_p.save(buf_p, format="JPEG", quality=88)
 
     with prev_col2:
         st.image(buf_p.getvalue(),
-                 caption=f"第 {preview_row} 筆 ｜ {str(row_p.get('Content',''))[:20]}…",
+                 caption=f"第 {preview_row} 筆 ｜ 實際遮罩：{used_darkness:.2f}",
                  width=420)
+        if auto_darkness:
+            st.caption(f"💡 智能遮罩依此底圖亮度自動設為 **{used_darkness:.2f}**")
 
     st.divider()
 
-    # ── 正式批次生成 ──────────────────────────────────────────
+    # ── 批次生成 ──────────────────────────────────────────────
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
         with st.spinner("正在建構 A4 2x3 排版..."):
             zip_bytes = st.session_state.zip_bytes_cache
@@ -366,10 +372,10 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             miss_list          = []
 
             for idx, row in df.iterrows():
-                card_pil, matched_path = generate_card_image(
+                card_pil, matched_path, _ = generate_card_image(
                     row, zf, zip_index, font_c, font_s,
-                    bg_darkness, text_color,
-                    line_spacing, stroke_width, glow_strength
+                    bg_darkness, auto_darkness,
+                    text_color, line_spacing, stroke_width, glow_strength
                 )
                 if not matched_path:
                     miss_list.append(str(row.get('Image_Name', idx)))
