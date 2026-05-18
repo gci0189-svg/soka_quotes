@@ -33,10 +33,10 @@ auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調
 if auto_darkness:
     st.sidebar.caption("智能模式：依底圖亮度自動計算基準，再加下方偏移量。")
     bg_darkness = st.sidebar.slider("手動微調偏移量（+ 加深 / - 減淺）",
-                                    -0.30, 0.30, 0, step=0.05)
+                                    -0.30, 0.30, 0.0, step=0.05)
 else:
     bg_darkness = st.sidebar.slider("手動遮罩黯淡度（完全自訂）",
-                                    0.0, 1.0, 0.35, step=0.05)
+                                    0.0, 1.0, 0.0, step=0.05)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
