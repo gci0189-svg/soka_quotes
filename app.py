@@ -23,8 +23,8 @@ if font_mode == "自行從電腦上傳 TTF":
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📝 文字設定**")
 font_size_content = st.sidebar.slider("正文字型大小", 20, 100, 70, step=2)
-font_size_source  = st.sidebar.slider("出處字型大小", 14, 40, 28, step=2)
-line_spacing      = st.sidebar.slider("行距倍數", 1.2, 2.5, 1.6, step=0.1)
+font_size_source  = st.sidebar.slider("出處字型大小", 14, 70, 40, step=2)
+line_spacing      = st.sidebar.slider("行距倍數", 1.2, 4.5, 2, step=0.1)
 text_color        = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
