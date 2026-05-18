@@ -30,9 +30,13 @@ text_color        = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🌄 背景設定**")
 auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調整）", value=True)
-bg_darkness   = st.sidebar.slider("手動遮罩黯淡度（智能關閉時生效）",
-                                   0.0, 1.0, 0.35, step=0.05,
-                                   disabled=auto_darkness)
+if auto_darkness:
+    st.sidebar.caption("智能模式：依底圖亮度自動計算基準，再加下方偏移量。")
+    bg_darkness = st.sidebar.slider("手動微調偏移量（+ 加深 / - 減淺）",
+                                    -0.30, 0.30, 0.0, step=0.05)
+else:
+    bg_darkness = st.sidebar.slider("手動遮罩黯淡度（完全自訂）",
+                                    0.0, 1.0, 0.35, step=0.05)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
@@ -232,7 +236,9 @@ def generate_card_image(row, zf, zip_index, font_c, font_s,
 
     # 智能遮罩：依底圖亮度自動計算
     if auto_darkness_on:
-        actual_darkness = smart_darkness(card_img.convert("RGB"), bg_darkness)
+        # 智能基準 + 手動偏移（bg_darkness 此時是 -0.3~+0.3 的偏移量）
+        base = smart_darkness(card_img.convert("RGB"), 0)
+        actual_darkness = round(min(max(base + bg_darkness, 0.0), 0.85), 2)
     else:
         actual_darkness = bg_darkness
 
