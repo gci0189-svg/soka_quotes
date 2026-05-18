@@ -29,7 +29,7 @@ text_color        = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🌄 背景設定**")
-auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調整）", value=True)
+auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調整）", value=False)
 if auto_darkness:
     st.sidebar.caption("智能模式：依底圖亮度自動計算基準，再加下方偏移量。")
     bg_darkness = st.sidebar.slider("手動微調偏移量（+ 加深 / - 減淺）",
