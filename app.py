@@ -36,7 +36,7 @@ if auto_darkness:
                                     -0.30, 0.30, 0.0, step=0.05)
 else:
     bg_darkness = st.sidebar.slider("手動遮罩黯淡度（完全自訂）",
-                                    0.0, 1.0, 0.0, step=0.05)
+                                    0.0, 1.0, 0.35, step=0.05)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
@@ -90,7 +90,7 @@ def smart_darkness(img_rgb: Image.Image, base: float) -> float:
 
     # 亮度映射：亮圖(200+)→遮罩0.50，暗圖(60-)→遮罩0.20，中間線性插值
     brightness_norm = avg_brightness / 255.0   # 0~1
-    darkness = 0.20 + brightness_norm * 0   # 範圍：0.20~0.55
+    darkness = 0.20 + brightness_norm * 0.35   # 範圍：0.20~0.55
     return round(min(max(darkness, 0.15), 0.60), 2)
 
 
