@@ -40,8 +40,8 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
-stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 5, 2, step=1)
-glow_strength = st.sidebar.slider("文字發光強度（0=關閉）", 0, 8, 3, step=1)
+stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 5, 3, step=1)
+glow_strength = st.sidebar.slider("文字發光強度（0=關閉）", 0, 8, 0, step=1)
 
 st.sidebar.markdown("---")
 show_cut_lines = st.sidebar.checkbox("顯示 A4 裁切虛線", value=True)
@@ -90,7 +90,7 @@ def smart_darkness(img_rgb: Image.Image, base: float) -> float:
 
     # 亮度映射：亮圖(200+)→遮罩0.50，暗圖(60-)→遮罩0.20，中間線性插值
     brightness_norm = avg_brightness / 255.0   # 0~1
-    darkness = 0.20 + brightness_norm * 0.35   # 範圍：0.20~0.55
+    darkness = 0.20 + brightness_norm * 0   # 範圍：0.20~0.55
     return round(min(max(darkness, 0.15), 0.60), 2)
 
 
