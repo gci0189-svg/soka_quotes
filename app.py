@@ -39,7 +39,9 @@ with col1:
 with col2:
     uploaded_zip = st.file_uploader("2. 上傳素材壓縮包 (soka_all_materials.zip)", type=["zip"])
 
-for k, v in [("pdf_data", None), ("preview_bytes_list", []), ("last_params", None)]:
+for k, v in [("pdf_data", None), ("preview_bytes_list", []),
+             ("last_params", None), ("zip_bytes_cache", None),
+             ("csv_cache", None), ("zip_index_cache", None)]:
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -85,7 +87,6 @@ def build_zip_index(zip_bytes: bytes):
 
         all_paths.append(name)
         stem = os.path.splitext(bn)[0]
-
         index.setdefault(bn.lower(), name)
         index.setdefault(stem.lower(), name)
 
@@ -110,15 +111,12 @@ def find_in_index(raw_img_name: str, index: dict):
     raw = str(raw_img_name).strip()
     if raw.endswith('.0'):
         raw = raw[:-2]
-
     stem_raw = os.path.splitext(raw)[0]
     candidates = [raw.lower(), stem_raw.lower()]
-
     for num in re.findall(r'\d+', stem_raw):
         n = int(num)
         for key in [num, str(n), str(n).zfill(2), str(n).zfill(3), str(n).zfill(4)]:
             candidates.append(key)
-
     m = re.match(r'^([a-zA-Z_\-]+)(\d+)(\.[a-zA-Z]+)?$', raw)
     if m:
         prefix, num_part = m.group(1), m.group(2)
@@ -127,7 +125,6 @@ def find_in_index(raw_img_name: str, index: dict):
             k = prefix + (str(n) if pad == 0 else str(n).zfill(pad))
             for suffix in ['', '.jpg', '.jpeg', '.png']:
                 candidates.append((k + suffix).lower())
-
     for key in candidates:
         if key in index:
             return index[key]
@@ -170,7 +167,6 @@ def generate_card_image(row, zf, zip_index, font_c, font_s, bg_darkness, text_co
 
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
 
-    # 遮罩：paste + L mask（不用 RGBA draw，避免 Pillow alpha 合成問題）
     if bg_darkness > 0:
         black  = Image.new("RGB", (1000, 1000), (0, 0, 0))
         mask_l = Image.new("L",   (1000, 1000), int(255 * bg_darkness))
@@ -205,15 +201,31 @@ def generate_card_image(row, zf, zip_index, font_c, font_s, bg_darkness, text_co
     return card_img, matched
 
 
+# ── 上傳後快取 zip & csv bytes ────────────────────────────────
+# 在按鈕被點擊之前，先把檔案讀進 session_state 快取，
+# 這樣之後調 slider 也不需要重新上傳。
+if uploaded_csv and uploaded_zip:
+    # 只在檔案名稱變更時重新讀取（避免每次 rerun 都讀）
+    csv_name = uploaded_csv.name
+    zip_name = uploaded_zip.name
+    if st.session_state.get("_csv_name") != csv_name:
+        st.session_state["_csv_name"]    = csv_name
+        st.session_state.csv_cache       = uploaded_csv.read()
+    if st.session_state.get("_zip_name") != zip_name:
+        st.session_state["_zip_name"]    = zip_name
+        st.session_state.zip_bytes_cache = uploaded_zip.read()
+        # 重建索引
+        idx, paths, zf_obj = build_zip_index(st.session_state.zip_bytes_cache)
+        st.session_state.zip_index_cache = (idx, paths, zf_obj)
+
 # ── 診斷 ──────────────────────────────────────────────────────
 
 if uploaded_csv and uploaded_zip:
 
     with st.expander("🔍 診斷：查看 ZIP 內容 & 前 10 筆配對", expanded=False):
         if st.button("執行診斷（不生成 PDF）"):
-            zip_bytes_d = uploaded_zip.read()
-            df_d = pd.read_csv(uploaded_csv)
-            idx_d, paths_d, zf_d = build_zip_index(zip_bytes_d)
+            idx_d, paths_d, zf_d = st.session_state.zip_index_cache
+            df_d = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
 
             st.write(f"**ZIP 合法圖片數：{len(paths_d)}**")
             st.code("\n".join(paths_d[:20]))
@@ -236,15 +248,49 @@ if uploaded_csv and uploaded_zip:
                         st.error(f"圖片讀取失敗：{e}")
                     break
 
+    # ── ★ 單張即時預覽 ────────────────────────────────────────
+    st.subheader("🖼️ 單張即時預覽")
+    st.caption("調整左側參數後點擊「更新預覽」，即時查看文字效果。")
+
+    idx_p, _, zf_p = st.session_state.zip_index_cache
+    df_p = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
+    max_row = len(df_p) - 1
+
+    prev_col1, prev_col2 = st.columns([1, 2])
+    with prev_col1:
+        preview_row = st.number_input("預覽第幾筆語錄（0 起算）",
+                                      min_value=0, max_value=max_row, value=0, step=1)
+        update_preview = st.button("🔄 更新預覽", key="update_preview")
+
+    # 只有按下「更新預覽」才重新渲染（避免每次 slider 動就觸發）
+    if update_preview or "preview_card_bytes" not in st.session_state:
+        font_c_p, font_s_p = load_fonts(font_mode, uploaded_font,
+                                         font_size_content, font_size_source)
+        row_p = df_p.iloc[int(preview_row)]
+        card_p, _ = generate_card_image(
+            row_p, zf_p, idx_p, font_c_p, font_s_p, bg_darkness, text_color
+        )
+        buf_p = io.BytesIO()
+        card_p.save(buf_p, format="JPEG", quality=85)
+        st.session_state["preview_card_bytes"] = buf_p.getvalue()
+
+    with prev_col2:
+        if "preview_card_bytes" in st.session_state:
+            st.image(st.session_state["preview_card_bytes"],
+                     caption=f"第 {preview_row} 筆語錄預覽", width=400)
+
+    st.divider()
+
     # ── 正式生成 ──────────────────────────────────────────────
     if st.button("🚀 開始批次排版並生成預覽", type="primary"):
         with st.spinner("正在建構 A4 2x3 排版..."):
 
-            zip_bytes = uploaded_zip.read()
-            df = pd.read_csv(uploaded_csv)
+            zip_bytes = st.session_state.zip_bytes_cache
+            df = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
             zip_index, all_paths, zf = build_zip_index(zip_bytes)
             st.sidebar.caption(f"📦 ZIP 偵測到 {len(all_paths)} 張圖片")
 
+            # ★ 修復2：每次按按鈕都用當前 slider 值重新載入字型
             font_c, font_s = load_fonts(font_mode, uploaded_font,
                                         font_size_content, font_size_source)
 
@@ -343,7 +389,6 @@ if st.session_state.pdf_data and st.session_state.preview_bytes_list:
         total_p     = len(st.session_state.preview_bytes_list)
         page_select = st.slider("切換預覽頁數", 1, total_p, 1) if total_p > 1 else 1
         st.write(f"📄 第 **{page_select}** / {total_p} 頁（每頁 6 張小卡）")
-        # ★ 不傳 width 參數，讓圖片自動填滿欄位（Streamlit 1.57 相容寫法）
         st.image(
             st.session_state.preview_bytes_list[page_select - 1],
             caption=f"第 {page_select} 頁 A4 實印排版",
