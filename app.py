@@ -8,6 +8,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 
 st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
 st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
@@ -18,7 +19,9 @@ st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FONT_CHAIN = [
-    # 優先用完整中文字型，避免手寫字缺字時被畫成小方框。
+    # 預設手寫字優先；遇到缺字再逐字切到完整中文字型。
+    "fonts/芫荽.ttf",
+    "芫荽.ttf",
     "fonts/思源黑體 Medium.ttf",
     "思源黑體 Medium.ttf",
     "fonts/源泉圓體.otf",
@@ -27,8 +30,6 @@ FONT_CHAIN = [
     "NotoSansTC-Regular.ttf",
     "fonts/MSJH.ttf",
     "MSJH.ttf",
-    "fonts/芫荽.ttf",
-    "芫荽.ttf",
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
 ]
@@ -106,7 +107,91 @@ def pick_font_for_text(text: str, size: int):
         if font:
             return font, path
     return ImageFont.load_default(), "Pillow-default"
-# ══════════════════════════════════════════════════════════════
+
+@st.cache_resource
+def pick_font_for_char(ch: str, size: int, preferred_path: str = ""):
+    """逐字 fallback：先試目前字型，不支援就找下一個中文字型。"""
+    candidates = []
+    if preferred_path:
+        candidates.append(preferred_path)
+    candidates.extend([p for p in FONT_CHAIN if p and p not in candidates])
+
+    for path in candidates:
+        if text_has_all_glyphs(ch, path, size):
+            font = load_font(path, size, _font_index(path))
+            if font:
+                return font, path
+    return ImageFont.load_default(), "Pillow-default"
+
+def text_width_fallback(draw, text: str, size: int, preferred_path: str = "") -> int:
+    """計算逐字 fallback 後的實際寬度。"""
+    width = 0
+    for ch in text:
+        font, _ = pick_font_for_char(ch, size, preferred_path)
+        try:
+            width += int(draw.textlength(ch, font=font))
+        except Exception:
+            bbox = draw.textbbox((0, 0), ch, font=font)
+            width += bbox[2] - bbox[0]
+    return width
+
+def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str = "") -> list:
+    """只做寬度保護：太長才切行，不重新改寫使用者的斷句。"""
+    line = text.strip()
+    if not line:
+        return []
+    if text_width_fallback(draw, line, size, preferred_path) <= max_w:
+        return [line]
+
+    out, cur = [], ""
+    for ch in line:
+        if cur and text_width_fallback(draw, cur + ch, size, preferred_path) > max_w:
+            out.append(cur)
+            cur = ch
+        else:
+            cur += ch
+    if cur:
+        out.append(cur)
+    return out
+
+def manual_wrap_safe(text: str, size: int, max_w: int, draw, preferred_path: str = "") -> list:
+    """依 Enter 保留手動段落；單段過長時自動安全折行，避免跑出卡片。"""
+    lines = []
+    for part in text.split('\n'):
+        lines.extend(safe_wrap_line(part, size, max_w, draw, preferred_path))
+    return lines if lines else [text.strip() or text]
+
+def draw_text_fallback(draw, pos, text: str, size: int, preferred_path: str,
+                       fill_rgb, stroke_w=3, img=None, glow_str=0):
+    """逐字 fallback 繪製，單一缺字會自動改用備用中文字型。"""
+    x, y = pos
+    r, g, b = fill_rgb
+    bright = r * 0.299 + g * 0.587 + b * 0.114
+    stroke_fill = (15, 15, 15, 230) if bright > 128 else (240, 240, 240, 220)
+
+    def draw_runs(target_draw, xy, fill, stroke=0, stroke_fill_arg=None):
+        cx, cy = xy
+        for ch in text:
+            font, _ = pick_font_for_char(ch, size, preferred_path)
+            target_draw.text(
+                (cx, cy), ch, font=font, fill=fill,
+                stroke_width=stroke,
+                stroke_fill=stroke_fill_arg if stroke_fill_arg is not None else stroke_fill,
+            )
+            try:
+                cx += target_draw.textlength(ch, font=font)
+            except Exception:
+                bbox = target_draw.textbbox((0, 0), ch, font=font)
+                cx += bbox[2] - bbox[0]
+
+    if glow_str > 0 and img is not None:
+        gl = Image.new('RGBA', img.size, (0, 0, 0, 0))
+        gd = ImageDraw.Draw(gl)
+        draw_runs(gd, (x, y), (r, g, b, 160), stroke=0)
+        img.alpha_composite(gl.filter(ImageFilter.GaussianBlur(radius=glow_str)))
+        draw = ImageDraw.Draw(img, 'RGBA')
+
+    draw_runs(draw, (x, y), (r, g, b, 255), stroke=stroke_w, stroke_fill_arg=stroke_fill)# ══════════════════════════════════════════════════════════════
 # 側邊欄
 # ══════════════════════════════════════════════════════════════
 st.sidebar.header("🎨 小卡視覺調整面板")
@@ -349,48 +434,47 @@ def generate_card(row, row_idx, zf, zip_index,
     draw     = ImageDraw.Draw(card, 'RGBA')
     fill_rgb = hex_to_rgb(text_color_hex)
 
-    # ── 正文：整句 Fallback 字型選擇 ──────────────────────────
+    # ── 正文：支援手動斷句 + 逐字 fallback ─────────────────────
     raw_content = str(row.get('Content', '')).replace(' ', '')
 
     if custom_text is not None:
-        lines = manual_wrap(custom_text)
-        full_text_for_check = custom_text.replace('\n', '')
+        font_content, font_used = pick_font_for_text("高", font_size)
+        lines = manual_wrap_safe(custom_text, font_size, 840, draw, font_used)
     else:
-        # 先用主字型跑 smart_wrap 決定斷行，再決定字型
-        temp_font, _ = pick_font_for_text(raw_content, font_size)
-        lines        = smart_wrap(raw_content, temp_font, 840, draw)
-        full_text_for_check = raw_content
+        font_content, font_used = pick_font_for_text("高", font_size)
+        lines = smart_wrap(raw_content, font_content, 840, draw)
+        guarded_lines = []
+        for line in lines:
+            guarded_lines.extend(safe_wrap_line(line, font_size, 840, draw, font_used))
+        lines = guarded_lines if guarded_lines else lines
 
-    # 整句決定用哪個字型（一張卡全部行用同一字型）
-    font_content, font_used = pick_font_for_text(full_text_for_check, font_size)
-
-    # ── 出處字型（整句切換）──────────────────────────────────
+    # ── 出處字型（也支援 fallback）─────────────────────────────
     src = str(row.get('Source', ''))
     if src and src != 'nan':
-        font_source, _ = pick_font_for_text(src, size_source)
+        font_source, source_font_used = pick_font_for_text(src, size_source)
     else:
-        font_source, _ = pick_font_for_text('', size_source)
+        font_source, source_font_used = pick_font_for_text('', size_source)
 
     # ── 繪製正文 ──────────────────────────────────────────────
     bh      = draw.textbbox((0, 0), '高', font=font_content)
-    lh      = (bh[3] - bh[1]) * line_spacing_mult
+    lh      = max(1, (bh[3] - bh[1])) * line_spacing_mult
     total_h = len(lines) * lh
     start_y = (1000 - total_h) / 2 - 20
 
     for i, line in enumerate(lines):
-        bx = draw.textbbox((0, 0), line, font=font_content)
-        x  = (1000 - (bx[2] - bx[0])) / 2
+        line_w = text_width_fallback(draw, line, font_size, font_used)
+        x  = (1000 - line_w) / 2
         y  = start_y + i * lh
-        draw_text_pro(draw, (x, y), line, font_content, fill_rgb,
-                      stroke_w=stroke_w, img=card, glow_str=glow_str)
-        draw = ImageDraw.Draw(card, 'RGBA')  # 發光後重建
+        draw_text_fallback(draw, (x, y), line, font_size, font_used, fill_rgb,
+                           stroke_w=stroke_w, img=card, glow_str=glow_str)
+        draw = ImageDraw.Draw(card, 'RGBA')
 
     # ── 繪製出處 ──────────────────────────────────────────────
     if src and src != 'nan':
-        bs = draw.textbbox((0, 0), src, font=font_source)
-        xs = (1000 - (bs[2] - bs[0])) / 2
-        draw_text_pro(draw, (xs, 900), src, font_source, fill_rgb,
-                      stroke_w=stroke_w, img=card, glow_str=glow_str)
+        src_w = text_width_fallback(draw, src, size_source, source_font_used)
+        xs = (1000 - src_w) / 2
+        draw_text_fallback(draw, (xs, 900), src, size_source, source_font_used, fill_rgb,
+                           stroke_w=stroke_w, img=card, glow_str=glow_str)
 
     return card.convert('RGB'), matched, actual, font_used
 
@@ -452,16 +536,14 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             st.markdown("**✏️ 個別卡片客製化**")
 
             # 文字編輯框
-            default_text = override.get(
-                'content',
-                str(row_p.get('Content', '')).replace(' ', '')
-            )
+            original_text = str(row_p.get('Content', '')).replace(' ', '')
+            default_text = override.get('content', original_text)
             custom_text = st.text_area(
                 "手動斷句（Enter 換行；清空則恢復智能斷行）",
                 value=default_text,
                 height=140,
                 key=f"text_area_{preview_row}",
-                help="直接按 Enter 換行。清空則自動使用智能斷行。"
+                help="直接按 Enter 換行。若單行太長，預覽與 PDF 會自動做安全折行。"
             )
 
             # 個別字體大小
@@ -473,21 +555,26 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 key=f"size_slider_{preview_row}"
             )
 
+            # 自動暫存目前這張卡片，批次輸出 PDF 會直接套用。
+            entry = {}
+            if custom_text.strip() and custom_text != original_text:
+                entry['content'] = custom_text
+            if custom_size != g_font_size_content:
+                entry['font_size'] = custom_size
+            if entry:
+                st.session_state.card_overrides[row_key] = entry
+            else:
+                st.session_state.card_overrides.pop(row_key, None)
+
             col_save, col_reset = st.columns(2)
             with col_save:
-                if st.button("💾 儲存此卡設定", key=f"save_{preview_row}"):
-                    entry = {}
-                    if custom_text.strip():
-                        entry['content'] = custom_text
-                    if custom_size != g_font_size_content:
-                        entry['font_size'] = custom_size
-                    st.session_state.card_overrides[row_key] = entry
-                    st.success(f"✅ 第 {preview_row} 筆已儲存！")
+                if st.button("💾 已自動暫存", key=f"save_{preview_row}"):
+                    st.success(f"✅ 第 {preview_row} 筆目前設定已在暫存中！")
 
             with col_reset:
                 if st.button("🔄 還原預設", key=f"reset_{preview_row}"):
                     st.session_state.card_overrides.pop(row_key, None)
-                    st.success("已還原為全局設定。")
+                    st.rerun()
 
             # 已客製化清單
             if st.session_state.card_overrides:
@@ -501,10 +588,8 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                     st.caption(f"第 {k} 筆：{'、'.join(tags)}")
 
         with c_right:
-            # 即時預覽：用 text_area 當前值（未必已儲存）
-            live_override = {}
-            if custom_text.strip():
-                live_override['content']   = custom_text
+            # 即時預覽：使用目前已自動暫存的設定
+            live_override = entry.copy()
             live_override['font_size'] = custom_size
 
             card_p, _, used_dark, font_used = generate_card(
@@ -595,7 +680,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 buf = io.BytesIO()
                 card_pil.save(buf, format='JPEG', quality=88)
                 buf.seek(0)
-                c.drawImage(canvas.ImageReader(buf), xp, yp, width=cw*mm, height=ch*mm)
+                c.drawImage(ImageReader(buf), xp, yp, width=cw*mm, height=ch*mm)
                 if show_cut_lines:
                     c.setStrokeColorRGB(0.7, 0.7, 0.7)
                     c.setLineWidth(0.3)
