@@ -20,10 +20,10 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FONT_CHAIN = [
     # 預設手寫字優先；若整句含缺字風險，整句切到完整中文字型。
-    "fonts/芫荽.ttf",
-    "芫荽.ttf",
-    "fonts/思源黑體 Medium.ttf",
-    "思源黑體 Medium.ttf",
+    "fonts/思源黑體 Heavy.otf",
+    "思源黑體 Heavy.otf",
+    "fonts/源樣黑體 Heavy.otf",
+    "源樣黑體 Heavy.otf",
     "fonts/源泉圓體.otf",
     "源泉圓體.otf",
     "fonts/NotoSansTC-Regular.ttf",
@@ -102,7 +102,7 @@ def pick_font_for_text(text: str, size: int):
         if not path:
             continue
         # 芫荽遇到高風險字時不要只補單字，直接讓整句使用下一個完整中文字型。
-        if has_unsafe_char and '芫荽' in path:
+        if has_unsafe_char and '思源黑體 Heavy' in path:
             continue
         if text_has_all_glyphs(text, path, size):
             font = load_font(path, size, _font_index(path))
@@ -111,7 +111,7 @@ def pick_font_for_text(text: str, size: int):
 
     # 最後保底：找得到哪個字型就先用哪個，至少避免 None。
     for path in FONT_CHAIN:
-        if has_unsafe_char and '芫荽' in path:
+        if has_unsafe_char and '思源黑體 Heavy' in path:
             continue
         font = load_font(path, size, _font_index(path))
         if font:
