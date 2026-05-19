@@ -546,20 +546,35 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 help="直接按 Enter 換行。若單行太長，預覽與 PDF 會自動做安全折行。"
             )
 
-            # 個別字體大小
-            current_size = override.get('font_size', g_font_size_content)
-            custom_size  = st.slider(
-                "此卡片正文字體大小",
-                min_value=20, max_value=70,
-                value=int(current_size), step=2,
-                key=f"size_slider_{preview_row}"
+            # 個別字體大小：未勾選時，永遠跟隨側邊欄全局字體大小。
+            use_custom_size = st.checkbox(
+                "使用此卡專屬字體大小",
+                value=('font_size' in override),
+                key=f"use_custom_size_{preview_row}"
             )
+            if use_custom_size:
+                current_size = override.get('font_size', g_font_size_content)
+                custom_size = st.slider(
+                    "此卡片正文字體大小",
+                    min_value=20, max_value=70,
+                    value=int(current_size), step=2,
+                    key=f"size_slider_{preview_row}"
+                )
+            else:
+                custom_size = g_font_size_content
+                st.slider(
+                    "此卡片正文字體大小（跟隨全局）",
+                    min_value=20, max_value=70,
+                    value=int(g_font_size_content), step=2,
+                    disabled=True,
+                    key=f"size_slider_global_{preview_row}"
+                )
 
             # 自動暫存目前這張卡片，批次輸出 PDF 會直接套用。
             entry = {}
             if custom_text.strip() and custom_text != original_text:
                 entry['content'] = custom_text
-            if custom_size != g_font_size_content:
+            if use_custom_size:
                 entry['font_size'] = custom_size
             if entry:
                 st.session_state.card_overrides[row_key] = entry
