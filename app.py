@@ -325,9 +325,9 @@ def draw_text_fallback(draw, pos, text: str, size: int, preferred_path: str,
 st.sidebar.header("🎨 小卡視覺調整面板")
 
 st.sidebar.markdown("**📝 全局文字設定**")
-g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 70, 46, step=2)
-g_font_size_source  = st.sidebar.slider("出處字型大小", 14, 40, 26, step=2)
-line_spacing        = st.sidebar.slider("行距倍數", 1.2, 2.5, 1.6, step=0.1)
+g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 100, 60, step=2)
+g_font_size_source  = st.sidebar.slider("出處字型大小", 14, 70, 40, step=2)
+line_spacing        = st.sidebar.slider("行距倍數", 1.2, 4.5, 2.0, step=0.1)
 text_color          = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
@@ -343,7 +343,7 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
-stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 5, 3, step=1)
+stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 10, 5, step=1)
 glow_strength = st.sidebar.slider("文字發光強度（0=關閉）", 0, 8, 0, step=1)
 
 st.sidebar.markdown("---")
