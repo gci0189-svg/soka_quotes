@@ -158,6 +158,13 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
     n_chars = len(line)
     close_punct = set("，。！？；：、,.!?;:)）】》」』〕〉")
     open_punct = set("（【《「『〔〈“‘(")
+    protected_words = [
+        "什麼", "怎麼", "為什麼", "勇氣", "對話", "身邊", "和平", "友好", "道路",
+        "心思", "接觸", "互相", "轉變", "一念", "鼓起", "進行", "打破",
+        "盤踞", "自己", "心中", "不信", "憎惡", "恐怖", "智慧", "表現",
+        "自然", "周密", "計劃", "具體性", "成功", "慈悲", "同苦", "想救",
+    ]
+    weak_tail_chars = set("用做有於與和及在的不、，")
 
     width_cache = {}
     def width(a, b):
@@ -165,6 +172,16 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
         if key not in width_cache:
             width_cache[key] = text_width_fallback(draw, line[a:b], size, preferred_path)
         return width_cache[key]
+
+    def breaks_protected_word(pos):
+        for word in protected_words:
+            start = line.find(word)
+            while start != -1:
+                end = start + len(word)
+                if start < pos < end:
+                    return True
+                start = line.find(word, start + 1)
+        return False
 
     def valid_piece(a, b):
         if a >= b:
@@ -175,6 +192,8 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
         if line[a] in close_punct:
             return False
         if line[b - 1] in open_punct:
+            return False
+        if b < n_chars and breaks_protected_word(b):
             return False
         if len(piece) <= 1 and n_chars > 1:
             return False
@@ -209,7 +228,13 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
                     if piece.count("「") != piece.count("」") or piece.count("『") != piece.count("』"):
                         new_score += 1600
                     if len(piece) <= 3 and end == n_chars:
-                        new_score += 2500
+                        new_score += 12000
+                    elif len(piece) <= 5 and end == n_chars:
+                        new_score += 4500
+                    if end < n_chars and piece[-1] in weak_tail_chars:
+                        new_score += 3500
+                    if len(piece) <= 4 and end < n_chars and piece[-1] not in close_punct:
+                        new_score += 2200
                     old = ndp.get(end)
                     if old is None or new_score < old[0]:
                         ndp[end] = (new_score, parts + [piece])
@@ -220,6 +245,30 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
                 best_score, best_lines = score, parts
 
     if best_lines:
+        if len(best_lines) >= 2 and len(best_lines[-1]) <= 4:
+            merged = best_lines[-2] + best_lines[-1]
+            best_split = None
+            best_split_score = None
+            for pos in range(2, len(merged) - 1):
+                if breaks_protected_word(n_chars - len(merged) + pos):
+                    continue
+                left, right = merged[:pos], merged[pos:]
+                if right[0] in close_punct or left[-1] in open_punct:
+                    continue
+                lw = text_width_fallback(draw, left, size, preferred_path)
+                rw = text_width_fallback(draw, right, size, preferred_path)
+                if lw > max_w or rw > max_w:
+                    continue
+                score = abs(lw - rw)
+                if left[-1] in "，。！？；：」』）】》":
+                    score -= 500
+                if len(right) <= 3:
+                    score += 5000
+                if best_split_score is None or score < best_split_score:
+                    best_split_score = score
+                    best_split = [left, right]
+            if best_split:
+                best_lines = best_lines[:-2] + best_split
         return best_lines
 
     out, cur = [], ""
@@ -276,9 +325,9 @@ def draw_text_fallback(draw, pos, text: str, size: int, preferred_path: str,
 st.sidebar.header("🎨 小卡視覺調整面板")
 
 st.sidebar.markdown("**📝 全局文字設定**")
-g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 100, 60, step=1)
-g_font_size_source  = st.sidebar.slider("出處字型大小", 14, 70, 40, step=1)
-line_spacing        = st.sidebar.slider("行距倍數", 1.2, 4.5, 2.0, step=0.1)
+g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 70, 46, step=2)
+g_font_size_source  = st.sidebar.slider("出處字型大小", 14, 40, 26, step=2)
+line_spacing        = st.sidebar.slider("行距倍數", 1.2, 2.5, 1.6, step=0.1)
 text_color          = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
