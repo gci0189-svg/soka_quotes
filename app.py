@@ -89,12 +89,14 @@ text_color          = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🌄 背景設定**")
-auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩", value=False)
+auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調整）", value=False)
 if auto_darkness:
-    st.sidebar.caption("依底圖亮度自動計算，下方可微調。")
-    bg_darkness = st.sidebar.slider("偏移量（+ 加深 / - 減淺）", -0.30, 0.30, 0.0, step=0.05)
+    st.sidebar.caption("智能模式：依底圖亮度自動計算基準，再加下方偏移量。")
+    bg_darkness = st.sidebar.slider("手動微調偏移量（+ 加深 / - 減淺）",
+                                    -0.30, 0.30, 0.0, step=0.05)
 else:
-    bg_darkness = st.sidebar.slider("手動遮罩黯淡度", 0.0, 1.0, 0.0, step=0.05)
+    bg_darkness = st.sidebar.slider("手動遮罩黯淡度（完全自訂）",
+                                    0.0, 1.0, 0.0, step=0.05)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
