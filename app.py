@@ -22,9 +22,9 @@ if font_mode == "自行從電腦上傳 TTF":
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📝 文字設定**")
-font_size_content = st.sidebar.slider("正文字型大小", 20, 100, 70, step=1)
-font_size_source  = st.sidebar.slider("出處字型大小", 14, 70, 40, step=1)
-line_spacing      = st.sidebar.slider("行距倍數", 1.2, 4.5, 2.0, step=0.1)
+font_size_content = st.sidebar.slider("正文字型大小", 20, 70, 46, step=2)
+font_size_source  = st.sidebar.slider("出處字型大小", 14, 40, 28, step=2)
+line_spacing      = st.sidebar.slider("行距倍數", 1.2, 2.5, 1.6, step=0.1)
 text_color        = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
@@ -75,39 +75,77 @@ def hex_to_rgb(hex_color: str) -> tuple:
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
 
 
-def smart_darkness(img_rgb: Image.Image, base: float) -> float:
-    """
-    偵測底圖中央文字區域的平均亮度，
-    亮圖自動加深遮罩，暗圖減淺，保留底圖美感。
-    base = 使用者設定的基準值（0~1），智能模式下忽略，改用自動計算。
-    """
-    # 取中央 40% 區域做亮度取樣
+def smart_darkness(img_rgb: Image.Image) -> float:
     w, h = img_rgb.size
     cx1, cy1 = int(w * 0.3), int(h * 0.25)
     cx2, cy2 = int(w * 0.7), int(h * 0.75)
     crop = img_rgb.crop((cx1, cy1, cx2, cy2)).convert("L")
-    avg_brightness = sum(crop.getdata()) / (crop.width * crop.height)  # 0~255
-
-    # 亮度映射：亮圖(200+)→遮罩0.50，暗圖(60-)→遮罩0.20，中間線性插值
-    brightness_norm = avg_brightness / 255.0   # 0~1
-    darkness = 0.20 + brightness_norm * 0.35   # 範圍：0.20~0.55
-    return round(min(max(darkness, 0.15), 0.60), 2)
+    avg  = sum(crop.getdata()) / (crop.width * crop.height)
+    return round(min(max(0.20 + (avg / 255.0) * 0.35, 0.15), 0.60), 2)
 
 
-def text_wrap(text, font, max_width, draw):
-    lines, cur = [], ""
+def smart_wrap(text: str, font, max_width: int, draw) -> list:
+    """
+    智能斷行：
+    1. 句末標點（。！？…）後優先斷行
+    2. 若仍只有1行且字數多，嘗試在中間找標點；找不到就平均對切
+    3. 最後一行太短（≤3字）時，往前合併再平均分
+    4. 兜底：逐字硬換行
+    """
+    BREAK_AFTER = set("。！？…；")
+
+    # Step1：依句末標點切語意塊
+    chunks, buf = [], ""
     for ch in text:
-        test = cur + ch
-        w = draw.textbbox((0, 0), test, font=font)[2]
-        if w <= max_width:
+        buf += ch
+        if ch in BREAK_AFTER:
+            chunks.append(buf); buf = ""
+    if buf:
+        chunks.append(buf)
+
+    # Step2：把語意塊填進行
+    lines, cur = [], ""
+    for chunk in chunks:
+        test = cur + chunk
+        if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
             cur = test
         else:
             if cur:
-                lines.append(cur)
-            cur = ch
+                lines.append(cur); cur = ""
+            # chunk 本身超寬 → 逐字塞
+            for ch in chunk:
+                test2 = cur + ch
+                if draw.textbbox((0, 0), test2, font=font)[2] <= max_width:
+                    cur = test2
+                else:
+                    if cur: lines.append(cur)
+                    cur = ch
     if cur:
         lines.append(cur)
-    return lines
+
+    # Step3：只有1行且偏長 → 嘗試平均拆2行
+    if len(lines) == 1 and len(lines[0]) >= 12:
+        s   = lines[0]
+        mid = len(s) // 2
+        # 從中間往兩側找句末標點
+        best = mid
+        for off in range(0, mid + 1):
+            for pos in [mid - off, mid + off + 1]:
+                if 0 < pos <= len(s) and s[pos - 1] in BREAK_AFTER:
+                    best = pos
+                    break
+            else:
+                continue
+            break
+        lines = [s[:best], s[best:]] if s[best:] else [s]
+
+    # Step4：最後一行 ≤3字 → 合併倒數兩行再平均切
+    if len(lines) >= 2 and len(lines[-1]) <= 3:
+        merged = lines[-2] + lines[-1]
+        mid    = len(merged) // 2
+        lines  = lines[:-2] + [merged[:mid], merged[mid:]]
+
+    return lines if lines else [text]
 
 
 def build_zip_index(zip_bytes: bytes):
@@ -186,32 +224,28 @@ def load_fonts(font_mode, uploaded_font, size_content, size_source):
 
 def draw_text_pro(draw, pos, text, font, fill_rgb,
                   stroke_w=2, glow_str=3, img=None):
-    """描邊 + 發光，讓細字在任何背景清晰浮出。"""
+    """描邊 + 發光，出處與正文使用完全相同邏輯，確保清晰度一致。"""
     x, y = pos
+    r, g, b = fill_rgb
 
     # 發光層
     if glow_str > 0 and img is not None:
-        glow_layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        gd = ImageDraw.Draw(glow_layer)
-        r, g, b = fill_rgb
+        gl = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        gd = ImageDraw.Draw(gl)
         gd.text((x, y), text, font=font, fill=(r, g, b, 160))
-        img.alpha_composite(
-            glow_layer.filter(ImageFilter.GaussianBlur(radius=glow_str))
-        )
+        img.alpha_composite(gl.filter(ImageFilter.GaussianBlur(radius=glow_str)))
 
-    # 描邊層（自動配色）
+    # 描邊層
     if stroke_w > 0:
-        r, g, b = fill_rgb
         bright = r * 0.299 + g * 0.587 + b * 0.114
-        sc = (15, 15, 15, 210) if bright > 128 else (240, 240, 240, 190)
+        sc = (15, 15, 15, 220) if bright > 128 else (240, 240, 240, 200)
         for dx in range(-stroke_w, stroke_w + 1):
             for dy in range(-stroke_w, stroke_w + 1):
                 if abs(dx) + abs(dy) <= stroke_w + 1 and not (dx == 0 and dy == 0):
                     draw.text((x + dx, y + dy), text, font=font, fill=sc)
 
     # 主色層
-    draw.text((x, y), text, font=font,
-              fill=(fill_rgb[0], fill_rgb[1], fill_rgb[2], 255))
+    draw.text((x, y), text, font=font, fill=(r, g, b, 255))
 
 
 def generate_card_image(row, zf, zip_index, font_c, font_s,
@@ -234,25 +268,23 @@ def generate_card_image(row, zf, zip_index, font_c, font_s,
 
     card_img = card_img.resize((1000, 1000), resample=Image.Resampling.BILINEAR)
 
-    # 智能遮罩：依底圖亮度自動計算
+    # 遮罩
     if auto_darkness_on:
-        # 智能基準 + 手動偏移（bg_darkness 此時是 -0.3~+0.3 的偏移量）
-        base = smart_darkness(card_img.convert("RGB"), 0)
+        base = smart_darkness(card_img.convert("RGB"))
         actual_darkness = round(min(max(base + bg_darkness, 0.0), 0.85), 2)
     else:
         actual_darkness = bg_darkness
 
     if actual_darkness > 0:
-        overlay = Image.new("RGBA", (1000, 1000),
-                            (0, 0, 0, int(255 * actual_darkness)))
+        overlay = Image.new("RGBA", (1000, 1000), (0, 0, 0, int(255 * actual_darkness)))
         card_img = Image.alpha_composite(card_img, overlay)
 
     draw     = ImageDraw.Draw(card_img, "RGBA")
     fill_rgb = hex_to_rgb(text_color_hex)
 
+    # ── 正文：智能斷行 ─────────────────────────────────────────
     content_text = str(row.get('Content', '')).replace(" ", "")
-    lines = text_wrap(content_text, font_c, 820, draw)
-
+    lines   = smart_wrap(content_text, font_c, 840, draw)
     bh      = draw.textbbox((0, 0), "高", font=font_c)
     lh      = (bh[3] - bh[1]) * line_spacing_mult
     total_h = len(lines) * lh
@@ -263,32 +295,49 @@ def generate_card_image(row, zf, zip_index, font_c, font_s,
         x  = (1000 - (bx[2] - bx[0])) / 2
         y  = start_y + i * lh
         draw_text_pro(draw, (x, y), line, font_c, fill_rgb,
-                      stroke_w=stroke_width, glow_str=glow_strength,
-                      img=card_img)
+                      stroke_w=stroke_width, glow_str=glow_strength, img=card_img)
 
+    # ── 出處：與正文同套描邊邏輯，stroke 稍小一階 ─────────────
     source_text = str(row.get('Source', ''))
     if source_text and source_text != "nan":
-        bs = draw.textbbox((0, 0), source_text, font=font_s)
-        xs = 1000 - (bs[2] - bs[0]) - 60
-        ys = 900
+        bs  = draw.textbbox((0, 0), source_text, font=font_s)
+        xs  = (1000 - (bs[2] - bs[0])) / 2   # ← 置中，比右對齊更穩定
+        ys  = 900
         draw_text_pro(draw, (xs, ys), source_text, font_s, fill_rgb,
-                      stroke_w=max(0, stroke_width - 1),
-                      glow_str=max(0, glow_strength - 1),
+                      stroke_w=stroke_width,          # ← 與正文一致
+                      glow_str=glow_strength,
                       img=card_img)
 
-    # 顯示實際使用的遮罩值（debug 用）
     return card_img.convert("RGB"), matched, actual_darkness
+
+
+def make_a4_preview(cards_in_page: list, card_w=95, card_h=89,
+                    margin_x=10, margin_y=15, show_cut=True) -> bytes:
+    """把最多6張卡合成一張 A4 預覽圖（840×1188），回傳 JPEG bytes。"""
+    page = Image.new("RGB", (840, 1188), (255, 255, 255))
+    draw = ImageDraw.Draw(page)
+    for gi, card_pil in enumerate(cards_in_page[:6]):
+        col_i = gi % 2
+        row_i = gi // 2
+        xi = int((margin_x + col_i * card_w) * 4)
+        yi = int((margin_y + row_i  * card_h) * 4)
+        page.paste(card_pil.resize((card_w*4, card_h*4),
+                                    resample=Image.Resampling.BILINEAR), (xi, yi))
+        if show_cut:
+            draw.rectangle([xi, yi, xi+card_w*4, yi+card_h*4],
+                           outline=(180, 180, 180), width=1)
+    buf = io.BytesIO()
+    page.resize((420, 594), resample=Image.Resampling.BILINEAR).save(buf, "JPEG", quality=82)
+    return buf.getvalue()
 
 
 # ── 快取 zip & csv ────────────────────────────────────────────
 if uploaded_csv and uploaded_zip:
-    csv_name = uploaded_csv.name
-    zip_name = uploaded_zip.name
-    if st.session_state.get("_csv_name") != csv_name:
-        st.session_state["_csv_name"] = csv_name
+    if st.session_state.get("_csv_name") != uploaded_csv.name:
+        st.session_state["_csv_name"] = uploaded_csv.name
         st.session_state.csv_cache    = uploaded_csv.read()
-    if st.session_state.get("_zip_name") != zip_name:
-        st.session_state["_zip_name"]    = zip_name
+    if st.session_state.get("_zip_name") != uploaded_zip.name:
+        st.session_state["_zip_name"]    = uploaded_zip.name
         st.session_state.zip_bytes_cache = uploaded_zip.read()
         idx, paths, zf_obj = build_zip_index(st.session_state.zip_bytes_cache)
         st.session_state.zip_index_cache = (idx, paths, zf_obj)
@@ -318,44 +367,58 @@ if uploaded_csv and uploaded_zip:
                         st.error(f"圖片讀取失敗：{e}")
                     break
 
-# ── 即時單張預覽（slider 動就自動更新）───────────────────────
+# ── 即時預覽 ──────────────────────────────────────────────────
 if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
-    st.subheader("🖼️ 即時單張預覽")
-    st.caption("⚡ 調整左側任何參數，預覽會自動更新，無需手動按鈕。")
 
     idx_p, _, zf_p = st.session_state.zip_index_cache
     df_p           = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
     max_row        = len(df_p) - 1
-
-    prev_col1, prev_col2 = st.columns([1, 2])
-    with prev_col1:
-        preview_row = st.number_input(
-            "預覽第幾筆語錄（0 起算）",
-            min_value=0, max_value=max_row, value=0, step=1,
-        )
-
     font_c_p, font_s_p = load_fonts(font_mode, uploaded_font,
                                     font_size_content, font_size_source)
-    row_p = df_p.iloc[int(preview_row)]
-    card_p, _, used_darkness = generate_card_image(
-        row_p, zf_p, idx_p, font_c_p, font_s_p,
-        bg_darkness, auto_darkness,
-        text_color, line_spacing, stroke_width, glow_strength
-    )
-    buf_p = io.BytesIO()
-    card_p.save(buf_p, format="JPEG", quality=88)
 
-    with prev_col2:
-        st.image(buf_p.getvalue(),
-                 caption=f"第 {preview_row} 筆 ｜ 實際遮罩：{used_darkness:.2f}",
-                 width=420)
-        if auto_darkness:
-            st.caption(f"💡 智能遮罩依此底圖亮度自動設為 **{used_darkness:.2f}**")
+    # ── 單張預覽 ──────────────────────────────────────────────
+    st.subheader("🖼️ 即時預覽")
+    tab_single, tab_a4 = st.tabs(["單張預覽", "A4 整頁預覽（前6筆）"])
+
+    with tab_single:
+        st.caption("⚡ 調整左側任何參數，預覽會自動更新。")
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            preview_row = st.number_input("預覽第幾筆語錄（0 起算）",
+                                          min_value=0, max_value=max_row,
+                                          value=0, step=1)
+        row_p = df_p.iloc[int(preview_row)]
+        card_p, _, used_dark = generate_card_image(
+            row_p, zf_p, idx_p, font_c_p, font_s_p,
+            bg_darkness, auto_darkness,
+            text_color, line_spacing, stroke_width, glow_strength
+        )
+        buf_p = io.BytesIO()
+        card_p.save(buf_p, format="JPEG", quality=88)
+        with c2:
+            st.image(buf_p.getvalue(),
+                     caption=f"第 {preview_row} 筆 ｜ 遮罩：{used_dark:.2f}",
+                     width=420)
+
+    # ── A4 整頁預覽（前 6 筆）────────────────────────────────
+    with tab_a4:
+        st.caption("⚡ 即時渲染前 6 筆語錄排成 A4，確認整頁視覺效果。")
+        preview_cards = []
+        for i in range(min(6, len(df_p))):
+            r = df_p.iloc[i]
+            cp, _, _ = generate_card_image(
+                r, zf_p, idx_p, font_c_p, font_s_p,
+                bg_darkness, auto_darkness,
+                text_color, line_spacing, stroke_width, glow_strength
+            )
+            preview_cards.append(cp)
+        a4_bytes = make_a4_preview(preview_cards, show_cut=show_cut_lines)
+        st.image(a4_bytes, caption="前 6 筆 A4 整頁預覽", width=500)
 
     st.divider()
 
-    # ── 批次生成 ──────────────────────────────────────────────
-    if st.button("🚀 開始批次排版並生成預覽", type="primary"):
+    # ── 批次生成 PDF ──────────────────────────────────────────
+    if st.button("🚀 開始批次排版並生成 PDF", type="primary"):
         with st.spinner("正在建構 A4 2x3 排版..."):
             zip_bytes = st.session_state.zip_bytes_cache
             df        = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
@@ -364,18 +427,18 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
 
             font_c, font_s = load_fonts(font_mode, uploaded_font,
                                         font_size_content, font_size_source)
-
             pdf_buf  = io.BytesIO()
             c        = canvas.Canvas(pdf_buf, pagesize=A4)
-            cur_page = Image.new("RGB", (840, 1188), (255, 255, 255))
-            pg_draw  = ImageDraw.Draw(cur_page)
+            cur_page_cards = []
+            cur_page_img   = Image.new("RGB", (840, 1188), (255, 255, 255))
+            pg_draw        = ImageDraw.Draw(cur_page_img)
 
             margin_x, margin_y = 10, 15
             card_w,   card_h   = 95, 89
-            total              = len(df)
-            pbar               = st.progress(0)
-            previews           = []
-            miss_list          = []
+            total    = len(df)
+            pbar     = st.progress(0)
+            previews = []
+            miss_list = []
 
             for idx, row in df.iterrows():
                 card_pil, matched_path, _ = generate_card_image(
@@ -398,7 +461,6 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 buf.seek(0)
                 c.drawImage(canvas.ImageReader(buf), xp, yp,
                             width=card_w * mm, height=card_h * mm)
-
                 if show_cut_lines:
                     c.setStrokeColorRGB(0.7, 0.7, 0.7)
                     c.setLineWidth(0.3)
@@ -406,11 +468,9 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
 
                 xi = int((margin_x + col_i * card_w) * 4)
                 yi = int((margin_y + row_i  * card_h) * 4)
-                cur_page.paste(
+                cur_page_img.paste(
                     card_pil.resize((card_w*4, card_h*4),
-                                    resample=Image.Resampling.BILINEAR),
-                    (xi, yi)
-                )
+                                    resample=Image.Resampling.BILINEAR), (xi, yi))
                 if show_cut_lines:
                     pg_draw.rectangle([xi, yi, xi+card_w*4, yi+card_h*4],
                                       outline=(180, 180, 180), width=1)
@@ -419,12 +479,12 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
 
                 if gi == 5 or idx == total - 1:
                     c.showPage()
-                    prev = cur_page.resize((420, 594), resample=Image.Resampling.BILINEAR)
+                    prev = cur_page_img.resize((420, 594), resample=Image.Resampling.BILINEAR)
                     b2   = io.BytesIO()
                     prev.save(b2, format="JPEG", quality=72)
                     previews.append(b2.getvalue())
-                    cur_page = Image.new("RGB", (840, 1188), (255, 255, 255))
-                    pg_draw  = ImageDraw.Draw(cur_page)
+                    cur_page_img = Image.new("RGB", (840, 1188), (255, 255, 255))
+                    pg_draw      = ImageDraw.Draw(cur_page_img)
 
             c.save()
             pdf_buf.seek(0)
@@ -434,20 +494,16 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             st.session_state.last_params        = sidebar_params.copy()
 
             if miss_list:
-                st.warning(
-                    f"⚠️ {len(miss_list)} 筆找不到對應底圖（米灰色取代）：\n"
-                    + "、".join(miss_list[:30])
-                )
+                st.warning(f"⚠️ {len(miss_list)} 筆找不到底圖：" + "、".join(miss_list[:30]))
             st.success(f"🎉 完成！共生成 {len(previews)} 頁 A4 排版。")
 
 elif not (uploaded_csv and uploaded_zip):
-    st.info("💡 請在上方分別拖入 csv 與 zip 素材包，系統就會啟動批次 PDF 排版。")
+    st.info("💡 請在上方分別拖入 csv 與 zip 素材包。")
 
 # ── 結果顯示 ──────────────────────────────────────────────────
 if st.session_state.pdf_data and st.session_state.preview_bytes_list:
     st.write("---")
     col_dl, col_view = st.columns([1, 2])
-
     with col_dl:
         st.subheader("📥 檔案下載")
         st.download_button(
@@ -457,14 +513,11 @@ if st.session_state.pdf_data and st.session_state.preview_bytes_list:
             mime="application/pdf",
             type="primary",
         )
-        st.info("💡 列印時請設為「實際大小(100%)」或「不縮放」，裁切線才會最準確。")
-
+        st.info("💡 列印時請設為「實際大小(100%)」或「不縮放」。")
     with col_view:
-        st.subheader("👀 A4 2x3 實際排版整頁預覽")
+        st.subheader("👀 A4 2x3 完整排版預覽")
         total_p     = len(st.session_state.preview_bytes_list)
         page_select = st.slider("切換預覽頁數", 1, total_p, 1) if total_p > 1 else 1
         st.write(f"📄 第 **{page_select}** / {total_p} 頁（每頁 6 張小卡）")
-        st.image(
-            st.session_state.preview_bytes_list[page_select - 1],
-            caption=f"第 {page_select} 頁 A4 實印排版",
-        )
+        st.image(st.session_state.preview_bytes_list[page_select - 1],
+                 caption=f"第 {page_select} 頁 A4 實印排版")
