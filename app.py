@@ -136,12 +136,75 @@ def text_width_fallback(draw, text: str, size: int, preferred_path: str = "") ->
     return width
 
 def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str = "") -> list:
-    """只做寬度保護：太長才切行，不重新改寫使用者的斷句。"""
+    """均衡折行：標點不孤立、行寬不超界、最後一行不過短。"""
     line = text.strip()
     if not line:
         return []
-    if text_width_fallback(draw, line, size, preferred_path) <= max_w:
+
+    total_w = text_width_fallback(draw, line, size, preferred_path)
+    if total_w <= max_w:
         return [line]
+
+    n_chars = len(line)
+    close_punct = set("，。！？；：、,.!?;:)）】》」』〕〉")
+    open_punct = set("（【《「『〔〈“‘(")
+
+    width_cache = {}
+    def width(a, b):
+        key = (a, b)
+        if key not in width_cache:
+            width_cache[key] = text_width_fallback(draw, line[a:b], size, preferred_path)
+        return width_cache[key]
+
+    def valid_piece(a, b):
+        if a >= b:
+            return False
+        piece = line[a:b].strip()
+        if not piece:
+            return False
+        if line[a] in close_punct:
+            return False
+        if line[b - 1] in open_punct:
+            return False
+        if len(piece) <= 1 and n_chars > 1:
+            return False
+        return width(a, b) <= max_w
+
+    min_lines = max(2, int(total_w // max_w) + (1 if total_w % max_w else 0))
+    best_lines, best_score = None, None
+
+    for target_lines in range(min_lines, min(min_lines + 4, 7) + 1):
+        target_w = total_w / target_lines
+        dp = {0: (0.0, [])}
+        for _ in range(target_lines):
+            ndp = {}
+            for start, (score, parts) in dp.items():
+                remaining_slots = target_lines - len(parts)
+                min_end = start + 1
+                max_end = n_chars - (remaining_slots - 1)
+                for end in range(min_end, max_end + 1):
+                    if not valid_piece(start, end):
+                        continue
+                    piece_w = width(start, end)
+                    piece = line[start:end]
+                    new_score = score + ((piece_w - target_w) ** 2) / 1000
+                    if piece[-1] in close_punct:
+                        new_score -= 80
+                    if end < n_chars and line[end] in close_punct:
+                        new_score += 5000
+                    if len(piece) <= 3 and end == n_chars:
+                        new_score += 2500
+                    old = ndp.get(end)
+                    if old is None or new_score < old[0]:
+                        ndp[end] = (new_score, parts + [piece])
+            dp = ndp
+        if n_chars in dp:
+            score, parts = dp[n_chars]
+            if best_score is None or score < best_score:
+                best_score, best_lines = score, parts
+
+    if best_lines:
+        return best_lines
 
     out, cur = [], ""
     for ch in line:
@@ -155,7 +218,7 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
     return out
 
 def manual_wrap_safe(text: str, size: int, max_w: int, draw, preferred_path: str = "") -> list:
-    """依 Enter 保留手動段落；單段過長時自動安全折行，避免跑出卡片。"""
+    """Enter 是硬斷行；每個段落內再做均衡折行。"""
     lines = []
     for part in text.split('\n'):
         lines.extend(safe_wrap_line(part, size, max_w, draw, preferred_path))
