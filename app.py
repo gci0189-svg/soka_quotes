@@ -19,7 +19,7 @@ st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 FONT_CHAIN = [
-    # 預設手寫字優先；遇到缺字再逐字切到完整中文字型。
+    # 預設手寫字優先；若整句含缺字風險，整句切到完整中文字型。
     "fonts/芫荽.ttf",
     "芫荽.ttf",
     "fonts/思源黑體 Medium.ttf",
@@ -33,6 +33,8 @@ FONT_CHAIN = [
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
 ]
+
+HANDWRITING_UNSAFE_CHARS = set("麼麽么〇○●◎※→←↑↓★☆♡♥✓✔✕✖⟪⟫")
 
 def resolve_font_path(path: str) -> str:
     """支援 repo 根目錄、fonts/ 子資料夾與 Linux 系統字型。"""
@@ -92,9 +94,15 @@ def text_has_all_glyphs(text: str, font_path: str, size: int) -> bool:
     return True
 
 def pick_font_for_text(text: str, size: int):
-    """依 FONT_CHAIN 順序找第一個能完整渲染整句的字型。"""
+    """整句切換字型：任一字不適合芫荽時，整句改用備用中文字型。"""
+    text = str(text or '')
+    has_unsafe_char = any(ch in HANDWRITING_UNSAFE_CHARS for ch in text)
+
     for path in FONT_CHAIN:
         if not path:
+            continue
+        # 芫荽遇到高風險字時不要只補單字，直接讓整句使用下一個完整中文字型。
+        if has_unsafe_char and '芫荽' in path:
             continue
         if text_has_all_glyphs(text, path, size):
             font = load_font(path, size, _font_index(path))
@@ -103,6 +111,8 @@ def pick_font_for_text(text: str, size: int):
 
     # 最後保底：找得到哪個字型就先用哪個，至少避免 None。
     for path in FONT_CHAIN:
+        if has_unsafe_char and '芫荽' in path:
+            continue
         font = load_font(path, size, _font_index(path))
         if font:
             return font, path
@@ -188,10 +198,16 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
                     piece_w = width(start, end)
                     piece = line[start:end]
                     new_score = score + ((piece_w - target_w) ** 2) / 1000
-                    if piece[-1] in close_punct:
-                        new_score -= 80
+                    if piece[-1] in "，。！？；：":
+                        new_score -= 5000
+                    elif piece[-1] in "」』）】》":
+                        new_score -= 1800
                     if end < n_chars and line[end] in close_punct:
-                        new_score += 5000
+                        new_score += 8000
+                    if end < n_chars and line[end] in "「『（【《":
+                        new_score -= 1000
+                    if piece.count("「") != piece.count("」") or piece.count("『") != piece.count("』"):
+                        new_score += 1600
                     if len(piece) <= 3 and end == n_chars:
                         new_score += 2500
                     old = ndp.get(end)
@@ -260,9 +276,9 @@ def draw_text_fallback(draw, pos, text: str, size: int, preferred_path: str,
 st.sidebar.header("🎨 小卡視覺調整面板")
 
 st.sidebar.markdown("**📝 全局文字設定**")
-g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 100, 60, step=1)
-g_font_size_source  = st.sidebar.slider("出處字型大小", 14, 70, 40, step=1)
-line_spacing        = st.sidebar.slider("行距倍數", 1.2, 4.5, 2.0, step=0.1)
+g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 70, 46, step=2)
+g_font_size_source  = st.sidebar.slider("出處字型大小", 14, 40, 26, step=2)
+line_spacing        = st.sidebar.slider("行距倍數", 1.2, 2.5, 1.6, step=0.1)
 text_color          = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
@@ -497,14 +513,15 @@ def generate_card(row, row_idx, zf, zip_index,
     draw     = ImageDraw.Draw(card, 'RGBA')
     fill_rgb = hex_to_rgb(text_color_hex)
 
-    # ── 正文：支援手動斷句 + 逐字 fallback ─────────────────────
+    # ── 正文：整句 fallback 字型 + 保守斷句 ─────────────────────
     raw_content = str(row.get('Content', '')).replace(' ', '')
 
     if custom_text is not None:
-        font_content, font_used = pick_font_for_text("高", font_size)
+        full_text_for_check = custom_text.replace('\n', '')
+        font_content, font_used = pick_font_for_text(full_text_for_check, font_size)
         lines = manual_wrap_safe(custom_text, font_size, 840, draw, font_used)
     else:
-        font_content, font_used = pick_font_for_text("高", font_size)
+        font_content, font_used = pick_font_for_text(raw_content, font_size)
         lines = smart_wrap(raw_content, font_content, 840, draw)
         guarded_lines = []
         for line in lines:
@@ -525,19 +542,21 @@ def generate_card(row, row_idx, zf, zip_index,
     start_y = (1000 - total_h) / 2 - 20
 
     for i, line in enumerate(lines):
-        line_w = text_width_fallback(draw, line, font_size, font_used)
+        bx = draw.textbbox((0, 0), line, font=font_content)
+        line_w = bx[2] - bx[0]
         x  = (1000 - line_w) / 2
         y  = start_y + i * lh
-        draw_text_fallback(draw, (x, y), line, font_size, font_used, fill_rgb,
-                           stroke_w=stroke_w, img=card, glow_str=glow_str)
+        draw_text_pro(draw, (x, y), line, font_content, fill_rgb,
+                      stroke_w=stroke_w, img=card, glow_str=glow_str)
         draw = ImageDraw.Draw(card, 'RGBA')
 
     # ── 繪製出處 ──────────────────────────────────────────────
     if src and src != 'nan':
-        src_w = text_width_fallback(draw, src, size_source, source_font_used)
+        bs = draw.textbbox((0, 0), src, font=font_source)
+        src_w = bs[2] - bs[0]
         xs = (1000 - src_w) / 2
-        draw_text_fallback(draw, (xs, 900), src, size_source, source_font_used, fill_rgb,
-                           stroke_w=stroke_w, img=card, glow_str=glow_str)
+        draw_text_pro(draw, (xs, 900), src, font_source, fill_rgb,
+                      stroke_w=stroke_w, img=card, glow_str=glow_str)
 
     return card.convert('RGB'), matched, actual, font_used
 
