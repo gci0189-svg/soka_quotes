@@ -15,55 +15,83 @@ st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
 # ══════════════════════════════════════════════════════════════
 # 字型系統：整句切換 Fallback
 # ══════════════════════════════════════════════════════════════
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 FONT_CHAIN = [
-    "fonts/芫荽.ttf",          # 主字型：文青手寫
-    "fonts/NotoSansTC-Regular.ttf",  # 備用 1：Noto TC
-    "fonts/MSJH.ttf",          # 備用 2：微軟正黑（兜底）
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # 系統 Noto（最終保底）
+    # 優先用完整中文字型，避免手寫字缺字時被畫成小方框。
+    "fonts/思源黑體 Medium.ttf",
+    "思源黑體 Medium.ttf",
+    "fonts/源泉圓體.otf",
+    "源泉圓體.otf",
+    "fonts/NotoSansTC-Regular.ttf",
+    "NotoSansTC-Regular.ttf",
+    "fonts/MSJH.ttf",
+    "MSJH.ttf",
+    "fonts/芫荽.ttf",
+    "芫荽.ttf",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
 ]
+
+def resolve_font_path(path: str) -> str:
+    """支援 repo 根目錄、fonts/ 子資料夾與 Linux 系統字型。"""
+    if not path:
+        return path
+    if os.path.isabs(path):
+        return path
+    return os.path.join(BASE_DIR, path)
 
 @st.cache_resource
 def load_font(path: str, size: int, index: int = 0):
     """載入字型，失敗回傳 None。"""
     try:
-        if path and os.path.exists(path):
-            return ImageFont.truetype(path, size, index=index)
+        real_path = resolve_font_path(path)
+        if real_path and os.path.exists(real_path):
+            return ImageFont.truetype(real_path, size, index=index)
     except Exception:
         pass
     return None
 
 def _font_index(path: str) -> int:
-    """NotoSansCJK .ttc 需要 index=2 才是 TC。"""
-    if "NotoSansCJK" in path and path.endswith(".ttc"):
-        return 2
+    """NotoSansCJK .ttc 用預設 index 較穩，避免挑到不適合的 collection。"""
     return 0
+
+def _glyph_signature(font, ch: str):
+    """把 glyph 畫成 mask 簽名；缺字通常會和 notdef 方框完全相同。"""
+    try:
+        mask = font.getmask(ch)
+        bbox = mask.getbbox()
+        if bbox is None:
+            return None
+        return (mask.size, bbox, bytes(mask))
+    except Exception:
+        return None
 
 @st.cache_data
 def text_has_all_glyphs(text: str, font_path: str, size: int) -> bool:
-    """
-    整句檢查：只要有任何一個字元在此字型缺字，就回傳 False。
-    使用 getmask().getbbox() — None 或空代表缺字。
-    """
+    """用 notdef mask 比對檢查缺字，避免把缺字方框誤判成正常文字。"""
     font = load_font(font_path, size, _font_index(font_path))
     if font is None:
         return False
+
+    missing_signatures = set()
+    for missing_ch in ("\uFFFF", "\uFFFE", "\U0010FFFF"):
+        sig = _glyph_signature(font, missing_ch)
+        if sig is not None:
+            missing_signatures.add(sig)
+
     for ch in text:
         if ch in (' ', '\n', '\u200b'):
             continue
-        try:
-            bbox = font.getmask(ch).getbbox()
-            if bbox is None or (bbox[2] - bbox[0]) <= 1 or (bbox[3] - bbox[1]) <= 1:
-                return False
-        except Exception:
+        sig = _glyph_signature(font, ch)
+        if sig is None:
+            return False
+        if missing_signatures and sig in missing_signatures:
             return False
     return True
 
 def pick_font_for_text(text: str, size: int):
-    """
-    整句切換 Fallback：
-    依 FONT_CHAIN 順序找第一個能完整渲染整句的字型。
-    回傳 (font_object, font_path_used)
-    """
+    """依 FONT_CHAIN 順序找第一個能完整渲染整句的字型。"""
     for path in FONT_CHAIN:
         if not path:
             continue
@@ -71,11 +99,13 @@ def pick_font_for_text(text: str, size: int):
             font = load_font(path, size, _font_index(path))
             if font:
                 return font, path
-    # 終極保底：用系統 Noto，不管缺不缺
-    path = FONT_CHAIN[-1]
-    font = load_font(path, size, _font_index(path))
-    return font, path
 
+    # 最後保底：找得到哪個字型就先用哪個，至少避免 None。
+    for path in FONT_CHAIN:
+        font = load_font(path, size, _font_index(path))
+        if font:
+            return font, path
+    return ImageFont.load_default(), "Pillow-default"
 # ══════════════════════════════════════════════════════════════
 # 側邊欄
 # ══════════════════════════════════════════════════════════════
