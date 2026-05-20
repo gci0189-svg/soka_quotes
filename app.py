@@ -13,23 +13,23 @@ from reportlab.pdfgen import canvas
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 
-st.set_page_config(page_title="?萄曌撠?Ｙ???, layout="wide", page_icon="??")
-st.title("?? ?萄曌撠 A4 2x3 ?Ｙ???)
+st.set_page_config(page_title="創價鼓勵小卡產生器", layout="wide", page_icon="🍀")
+st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
 
-# ??????????????????????????????????????????????????????????????
-# 摮?蝟餌絞嚗?亙???Fallback
-# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 字型系統：整句切換 Fallback
+# ══════════════════════════════════════════════════════════════
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVE_DIR = os.path.join(BASE_DIR, "saved_card_settings")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 FONT_CHAIN = [
-    "fonts/??暺? Heavy.otf",
-    "??暺? Heavy.otf",
-    "fonts/皞見暺? Heavy.otf",
-    "皞見暺? Heavy.otf",
-    "fonts/皞???.otf",
-    "皞???.otf",
+    "fonts/思源黑體 Heavy.otf",
+    "思源黑體 Heavy.otf",
+    "fonts/源樣黑體 Heavy.otf",
+    "源樣黑體 Heavy.otf",
+    "fonts/源泉圓體.otf",
+    "源泉圓體.otf",
     "fonts/NotoSansTC-Regular.ttf",
     "NotoSansTC-Regular.ttf",
     "fonts/MSJH.ttf",
@@ -38,7 +38,7 @@ FONT_CHAIN = [
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
 ]
 
-HANDWRITING_UNSAFE_CHARS = set("暻潮瑤銋????領???????乒??????)
+HANDWRITING_UNSAFE_CHARS = set("麼麽么〇○●◎※→←↑↓★☆♡♥✓✔✕✖⟪⟫")
 
 
 def resolve_font_path(path: str) -> str:
@@ -105,7 +105,7 @@ def pick_font_for_text(text: str, size: int):
     for path in FONT_CHAIN:
         if not path:
             continue
-        if has_unsafe_char and "??暺? Heavy" in path:
+        if has_unsafe_char and "思源黑體 Heavy" in path:
             continue
         if text_has_all_glyphs(text, path, size):
             font = load_font(path, size, _font_index(path))
@@ -113,7 +113,7 @@ def pick_font_for_text(text: str, size: int):
                 return font, path
 
     for path in FONT_CHAIN:
-        if has_unsafe_char and "??暺? Heavy" in path:
+        if has_unsafe_char and "思源黑體 Heavy" in path:
             continue
         font = load_font(path, size, _font_index(path))
         if font:
@@ -158,15 +158,15 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
         return [line]
 
     n_chars = len(line)
-    close_punct = set("嚗?嚗?嚗?.!?;:)嚗?)
-    open_punct = set("嚗?")
+    close_punct = set("，。！？；：、,.!?;:)）】》」』〕〉")
+    open_punct = set("（【《「『〔〈“‘(")
     protected_words = [
-        "隞暻?, "?獐", "?箔?暻?, "?除", "撠店", "頨恍?", "?像", "?末", "?楝",
-        "敹?, "?亥孛", "鈭", "頧?", "銝敹?, "曌絲", "?脰?", "?",
-        "?方?", "?芸楛", "敹葉", "銝縑", "?", "??, "?箸", "銵函",
-        "?芰", "?典?", "閮?", "?琿???, "??", "?", "?", "?單?",
+        "什麼", "怎麼", "為什麼", "勇氣", "對話", "身邊", "和平", "友好", "道路",
+        "心思", "接觸", "互相", "轉變", "一念", "鼓起", "進行", "打破",
+        "盤踞", "自己", "心中", "不信", "憎惡", "恐怖", "智慧", "表現",
+        "自然", "周密", "計劃", "具體性", "成功", "慈悲", "同苦", "想救",
     ]
-    weak_tail_chars = set("?典?????????")
+    weak_tail_chars = set("用做有於與和及在的不、，")
 
     width_cache = {}
 
@@ -220,15 +220,15 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
                     piece_w = width(start, end)
                     piece = line[start:end]
                     new_score = score + ((piece_w - target_w) ** 2) / 1000
-                    if piece[-1] in "嚗?嚗?嚗?:
+                    if piece[-1] in "，。！？；：":
                         new_score -= 5000
-                    elif piece[-1] in "????:
+                    elif piece[-1] in "」』）】》":
                         new_score -= 1800
                     if end < n_chars and line[end] in close_punct:
                         new_score += 8000
-                    if end < n_chars and line[end] in "????:
+                    if end < n_chars and line[end] in "「『（【《":
                         new_score -= 1000
-                    if piece.count("??) != piece.count("??) or piece.count("??) != piece.count("??):
+                    if piece.count("「") != piece.count("」") or piece.count("『") != piece.count("』"):
                         new_score += 1600
                     if len(piece) <= 3 and end == n_chars:
                         new_score += 12000
@@ -263,7 +263,7 @@ def safe_wrap_line(text: str, size: int, max_w: int, draw, preferred_path: str =
                 if lw > max_w or rw > max_w:
                     continue
                 score = abs(lw - rw)
-                if left[-1] in "嚗?嚗?嚗???:
+                if left[-1] in "，。！？；：」』）】》":
                     score -= 500
                 if len(right) <= 3:
                     score += 5000
@@ -293,9 +293,9 @@ def manual_wrap_safe(text: str, size: int, max_w: int, draw, preferred_path: str
     return lines if lines else [text.strip() or text]
 
 
-# ??????????????????????????????????????????????????????????????
-# 閮剖? JSON嚗璈??摮?+ ?臬/?臬
-# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 設定 JSON：本機自動保存 + 匯入/匯出
+# ══════════════════════════════════════════════════════════════
 def get_dataset_key(csv_bytes: bytes, zip_name: str = "") -> str:
     h = hashlib.sha256()
     h.update(csv_bytes or b"")
@@ -367,35 +367,36 @@ def parse_uploaded_settings(uploaded_file):
             return normalize_overrides(data.get("card_overrides")), data
         return normalize_overrides(data), {}
     except Exception as exc:
-        raise ValueError(f"閮剖? JSON 霈?仃??{exc}") from exc
+        raise ValueError(f"設定 JSON 讀取失敗：{exc}") from exc
 
 
-# ??????????????????????????????????????????????????????????????
-# ?湧?甈?# ??????????????????????????????????????????????????????????????
-st.sidebar.header("? 撠閬死隤踵?Ｘ")
+# ══════════════════════════════════════════════════════════════
+# 側邊欄
+# ══════════════════════════════════════════════════════════════
+st.sidebar.header("🎨 小卡視覺調整面板")
 
-st.sidebar.markdown("**?? ?典???閮剖?**")
-g_font_size_content = st.sidebar.slider("甇??摮?憭批?嚗撅嚗?, 20, 100, 60, step=1)
-g_font_size_source = st.sidebar.slider("?箄?摮?憭批?", 14, 70, 40, step=1)
-line_spacing = st.sidebar.slider("銵??", 1.2, 4.5, 2.0, step=0.1)
-text_color = st.sidebar.color_picker("??憿", "#FFFFFF")
+st.sidebar.markdown("**📝 全局文字設定**")
+g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 100, 60, step=1)
+g_font_size_source = st.sidebar.slider("出處字型大小", 14, 70, 40, step=1)
+line_spacing = st.sidebar.slider("行距倍數", 1.2, 4.5, 2.0, step=0.1)
+text_color = st.sidebar.color_picker("文字顏色", "#FFFFFF")
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**?? ?閮剖?**")
-auto_darkness = st.sidebar.checkbox("???箄?芸??桃蔗嚗?摨?鈭桀漲隤踵嚗?, value=False)
+st.sidebar.markdown("**🌄 背景設定**")
+auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調整）", value=False)
 if auto_darkness:
-    st.sidebar.caption("?箄璅∪?嚗?摨?鈭桀漲?芸?閮??箸?嚗????孵?蝘駁???)
-    bg_darkness = st.sidebar.slider("??敺株矽?宏??+ ?楛 / - 皜滓嚗?, -0.30, 0.30, 0.0, step=0.05)
+    st.sidebar.caption("智能模式：依底圖亮度自動計算基準，再加下方偏移量。")
+    bg_darkness = st.sidebar.slider("手動微調偏移量（+ 加深 / - 減淺）", -0.30, 0.30, 0.0, step=0.05)
 else:
-    bg_darkness = st.sidebar.slider("???桃蔗暺舀楚摨佗?摰?芾?嚗?, 0.0, 1.0, 0.0, step=0.05)
+    bg_darkness = st.sidebar.slider("手動遮罩黯淡度（完全自訂）", 0.0, 1.0, 0.0, step=0.05)
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**????皜撘瑕?**")
-stroke_width = st.sidebar.slider("????撖砍漲", 0, 10, 5, step=1)
-glow_strength = st.sidebar.slider("???澆?撘瑕漲嚗?=??嚗?, 0, 8, 0, step=1)
+st.sidebar.markdown("**✨ 文字清晰強化**")
+stroke_width = st.sidebar.slider("文字描邊寬度", 0, 10, 5, step=1)
+glow_strength = st.sidebar.slider("文字發光強度（0=關閉）", 0, 8, 0, step=1)
 
 st.sidebar.markdown("---")
-show_cut_lines = st.sidebar.checkbox("憿舐內 A4 鋆???", value=True)
+show_cut_lines = st.sidebar.checkbox("顯示 A4 裁切虛線", value=True)
 
 sidebar_params = dict(
     g_font_size_content=g_font_size_content,
@@ -409,13 +410,14 @@ sidebar_params = dict(
     show_cut_lines=show_cut_lines,
 )
 
-# ??????????????????????????????????????????????????????????????
-# 銝餌?Ｖ???# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 主畫面上傳
+# ══════════════════════════════════════════════════════════════
 col1, col2 = st.columns(2)
 with col1:
-    uploaded_csv = st.file_uploader("1. 銝隤?銵冽 (soka_quotes.csv)", type=["csv"])
+    uploaded_csv = st.file_uploader("1. 上傳語錄表格 (soka_quotes.csv)", type=["csv"])
 with col2:
-    uploaded_zip = st.file_uploader("2. 銝蝝?憯葬??(zip)", type=["zip"])
+    uploaded_zip = st.file_uploader("2. 上傳素材壓縮包 (zip)", type=["zip"])
 
 for k, v in [
     ("pdf_data", None),
@@ -431,9 +433,9 @@ for k, v in [
         st.session_state[k] = v
 
 
-# ??????????????????????????????????????????????????????????????
-# 撌亙?賢?
-# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 工具函式
+# ══════════════════════════════════════════════════════════════
 def hex_to_rgb(hex_color: str) -> tuple:
     h = hex_color.lstrip("#")
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
@@ -448,7 +450,7 @@ def smart_dark(img_rgb: Image.Image) -> float:
 
 
 def smart_wrap(text: str, font, max_w: int, draw) -> list:
-    break_after = set("??嚗佗?")
+    break_after = set("。！？…；")
     chunks, buf = [], ""
     for ch in text:
         buf += ch
@@ -577,8 +579,9 @@ def find_in_index(raw: str, index: dict):
     return next((index[c] for c in candidates if c in index), None)
 
 
-# ??????????????????????????????????????????????????????????????
-# ?詨?嚗??撘萄??# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 核心：生成單張卡片
+# ══════════════════════════════════════════════════════════════
 def generate_card(row, row_idx, zf, zip_index,
                   g_size_content, size_source,
                   bg_darkness, auto_darkness_on,
@@ -629,7 +632,7 @@ def generate_card(row, row_idx, zf, zip_index,
     else:
         font_source, _ = pick_font_for_text("", size_source)
 
-    bh = draw.textbbox((0, 0), "擃?, font=font_content)
+    bh = draw.textbbox((0, 0), "高", font=font_content)
     lh = max(1, (bh[3] - bh[1])) * line_spacing_mult
     total_h = len(lines) * lh
     start_y = (1000 - total_h) / 2 - 20
@@ -651,9 +654,9 @@ def generate_card(row, row_idx, zf, zip_index,
     return card.convert("RGB"), matched, actual, font_used
 
 
-# ??????????????????????????????????????????????????????????????
-# 敹怠? zip & csv + ?芸?頛?祆?閮剖?
-# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 快取 zip & csv + 自動載入本機設定
+# ══════════════════════════════════════════════════════════════
 if uploaded_csv and uploaded_zip:
     if st.session_state.get("_csv_name") != uploaded_csv.name:
         st.session_state["_csv_name"] = uploaded_csv.name
@@ -670,11 +673,11 @@ if uploaded_csv and uploaded_zip:
         st.session_state.card_overrides = load_card_overrides(dataset_key)
 
 
-# ??????????????????????????????????????????????????????????????
-# 閮剖?瑼??/ ?臬
-# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 設定檔匯入 / 匯出
+# ══════════════════════════════════════════════════════════════
 if uploaded_csv and uploaded_zip:
-    st.subheader("? ??∠?閮剖?")
+    st.subheader("💾 個別卡片設定")
     setting_col1, setting_col2, setting_col3 = st.columns([1, 1, 1])
 
     with setting_col1:
@@ -685,19 +688,19 @@ if uploaded_csv and uploaded_zip:
             st.session_state.get("_zip_name", ""),
         )
         st.download_button(
-            "漎? 銝?閮剖? JSON",
+            "⬇️ 下載設定 JSON",
             data=json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8"),
             file_name=f"soka_card_settings_{st.session_state.get('_dataset_key', 'manual')}.json",
             mime="application/json",
-            help="銝??桀??????亥??桀撐摮?閮剖?嚗?銝活?臬??,
+            help="下載目前所有手動斷句與單張字體設定，可留到下次匯入。",
         )
 
     with setting_col2:
         uploaded_settings = st.file_uploader(
-            "漎? 銝閮剖? JSON",
+            "⬆️ 上傳設定 JSON",
             type=["json"],
             key="settings_json_uploader",
-            help="?臬銋?銝??身摰?JSON??,
+            help="匯入之前下載的設定 JSON。",
         )
         if uploaded_settings is not None:
             try:
@@ -709,14 +712,14 @@ if uploaded_csv and uploaded_zip:
                     st.session_state.get("_csv_name", ""),
                     st.session_state.get("_zip_name", ""),
                 )
-                st.success(f"撌脣??{len(imported_overrides)} 撘萄閮剖???)
+                st.success(f"已匯入 {len(imported_overrides)} 張個別設定。")
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
 
     with setting_col3:
-        st.caption(f"?桀?撌脣恥鋆賢?嚗len(st.session_state.card_overrides)} 撘?)
-        if st.button("?完 皜征?桀?閮剖?"):
+        st.caption(f"目前已客製化：{len(st.session_state.card_overrides)} 張")
+        if st.button("🧹 清空目前設定"):
             st.session_state.card_overrides = {}
             save_card_overrides(
                 st.session_state.get("_dataset_key", ""),
@@ -727,38 +730,39 @@ if uploaded_csv and uploaded_zip:
             st.rerun()
 
 
-# ??????????????????????????????????????????????????????????????
-# 閮箸
-# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 診斷
+# ══════════════════════════════════════════════════════════════
 if uploaded_csv and uploaded_zip:
-    with st.expander("?? 閮箸嚗IP ?批捆 & ??", expanded=False):
-        if st.button("?瑁?閮箸"):
+    with st.expander("🔍 診斷：ZIP 內容 & 配對", expanded=False):
+        if st.button("執行診斷"):
             idx_d, paths_d, zf_d = st.session_state.zip_index_cache
             df_d = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
-            st.write(f"ZIP ???賂?{len(paths_d)}")
+            st.write(f"ZIP 圖片數：{len(paths_d)}")
             st.code("\n".join(paths_d[:20]))
             rows_out = []
             for _, r in df_d.head(10).iterrows():
                 hit = find_in_index(r["Image_Name"], idx_d)
-                rows_out.append({"Image_Name": str(r["Image_Name"]), "??蝯?": hit or "???曆???})
+                rows_out.append({"Image_Name": str(r["Image_Name"]), "配對結果": hit or "❌ 找不到"})
             st.table(pd.DataFrame(rows_out))
 
 
-# ??????????????????????????????????????????????????????????????
-# ?單??汗 + ??∠?摰Ｚˊ??# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 即時預覽 + 個別卡片客製化
+# ══════════════════════════════════════════════════════════════
 if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
     idx_p, _, zf_p = st.session_state.zip_index_cache
     df_p = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
     max_row = len(df_p) - 1
 
-    tab_single, tab_a4 = st.tabs(["?儭??桀撐?汗 & ?摰Ｚˊ??, "?? A4 ?湧??汗嚗?6蝑?"])
+    tab_single, tab_a4 = st.tabs(["🖼️ 單張預覽 & 個別客製化", "📄 A4 整頁預覽（前6筆）"])
 
     with tab_single:
         c_left, c_right = st.columns([1, 1])
 
         with c_left:
             preview_row = st.number_input(
-                "?汗蝚砍嗾蝑???0 韏瑞?嚗?,
+                "預覽第幾筆語錄（0 起算）",
                 min_value=0,
                 max_value=max_row,
                 value=0,
@@ -770,27 +774,27 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             override = st.session_state.card_overrides.get(row_key, {})
 
             st.markdown("---")
-            st.markdown("**?? ??∠?摰Ｚˊ??*")
+            st.markdown("**✏️ 個別卡片客製化**")
 
             original_text = str(row_p.get("Content", "")).replace(" ", "")
             default_text = override.get("content", original_text)
             custom_text = st.text_area(
-                "???瑕嚗nter ??嚗?蝛箏??Ｗ儔?箄?瑁?嚗?,
+                "手動斷句（Enter 換行；清空則恢復智能斷行）",
                 value=default_text,
                 height=140,
                 key=f"text_area_{preview_row}",
-                help="?湔??Enter ????株?憭芷嚗?閬質? PDF ???摰????,
+                help="直接按 Enter 換行。若單行太長，預覽與 PDF 會自動做安全折行。",
             )
 
             use_custom_size = st.checkbox(
-                "雿輻甇文撠惇摮?憭批?",
+                "使用此卡專屬字體大小",
                 value=("font_size" in override),
                 key=f"use_custom_size_{preview_row}",
             )
             if use_custom_size:
                 current_size = override.get("font_size", g_font_size_content)
                 custom_size = st.slider(
-                    "甇文?迤??擃之撠?,
+                    "此卡片正文字體大小",
                     min_value=20,
                     max_value=70,
                     value=int(current_size),
@@ -800,7 +804,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             else:
                 custom_size = g_font_size_content
                 st.slider(
-                    "甇文?迤??擃之撠?頝?典?嚗?,
+                    "此卡片正文字體大小（跟隨全局）",
                     min_value=20,
                     max_value=70,
                     value=int(g_font_size_content),
@@ -828,11 +832,11 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
 
             col_save, col_reset = st.columns(2)
             with col_save:
-                if st.button("? 撌脰?摮?, key=f"save_{preview_row}"):
-                    st.success(f"??蝚?{preview_row} 蝑?身摰歇?冽摮葉嚗?撌脣神?交璈?JSON嚗?)
+                if st.button("💾 已自動暫存", key=f"save_{preview_row}"):
+                    st.success(f"✅ 第 {preview_row} 筆目前設定已在暫存中，也已寫入本機 JSON！")
 
             with col_reset:
-                if st.button("?? ???身", key=f"reset_{preview_row}"):
+                if st.button("🔄 還原預設", key=f"reset_{preview_row}"):
                     st.session_state.card_overrides.pop(row_key, None)
                     save_card_overrides(
                         st.session_state.get("_dataset_key", ""),
@@ -844,14 +848,14 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
 
             if st.session_state.card_overrides:
                 st.markdown("---")
-                st.markdown(f"**?? 撌脣恥鋆賢?嚗len(st.session_state.card_overrides)} 撘?*")
+                st.markdown(f"**📋 已客製化：{len(st.session_state.card_overrides)} 張**")
                 for k, v in sorted(st.session_state.card_overrides.items(), key=lambda x: int(x[0])):
                     tags = []
                     if "content" in v:
-                        tags.append("???瑕")
+                        tags.append("手動斷句")
                     if "font_size" in v:
-                        tags.append(f"摮? {v['font_size']}")
-                    st.caption(f"蝚?{k} 蝑?{'??.join(tags)}")
+                        tags.append(f"字體 {v['font_size']}")
+                    st.caption(f"第 {k} 筆：{'、'.join(tags)}")
 
         with c_right:
             live_override = entry.copy()
@@ -875,15 +879,15 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             buf_p = io.BytesIO()
             card_p.save(buf_p, format="JPEG", quality=88)
 
-            font_label = os.path.basename(font_used) if font_used else "?身"
+            font_label = os.path.basename(font_used) if font_used else "預設"
             st.image(
                 buf_p.getvalue(),
-                caption=f"蝚?{preview_row} 蝑?嚚??桃蔗 {used_dark:.2f} 嚚?摮? {custom_size} 嚚?摮?嚗font_label}",
+                caption=f"第 {preview_row} 筆 ｜ 遮罩 {used_dark:.2f} ｜ 字體 {custom_size} ｜ 字型：{font_label}",
                 width=420,
             )
 
     with tab_a4:
-        st.caption("???單?皜脫???6 蝑?蝣箄??湧?閬死????)
+        st.caption("⚡ 即時渲染前 6 筆，確認整頁視覺效果。")
         preview_cards = []
         for i in range(min(6, len(df_p))):
             r = df_p.iloc[i]
@@ -915,15 +919,15 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 pd_draw.rectangle([xi, yi, xi + cw * 4, yi + ch * 4], outline=(180, 180, 180), width=1)
         buf_a4 = io.BytesIO()
         page.resize((420, 594), resample=Image.Resampling.BILINEAR).save(buf_a4, "JPEG", quality=82)
-        st.image(buf_a4.getvalue(), caption="??6 蝑?A4 ?湧??汗", width=500)
+        st.image(buf_a4.getvalue(), caption="前 6 筆 A4 整頁預覽", width=500)
 
     st.divider()
 
-    if st.button("?? ???寞活??銝衣???PDF", type="primary"):
-        with st.spinner("甇?撱箸? A4 2x3 ??..."):
+    if st.button("🚀 開始批次排版並生成 PDF", type="primary"):
+        with st.spinner("正在建構 A4 2x3 排版..."):
             df = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
             zip_index_b, all_paths_b, zf_b = build_zip_index(st.session_state.zip_bytes_cache)
-            st.sidebar.caption(f"? ZIP {len(all_paths_b)} 撘?)
+            st.sidebar.caption(f"📦 ZIP {len(all_paths_b)} 張")
 
             pdf_buf = io.BytesIO()
             c = canvas.Canvas(pdf_buf, pagesize=A4)
@@ -954,7 +958,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 )
                 if not matched:
                     miss_list.append(str(row.get("Image_Name", idx)))
-                if font_used and "?怨" not in font_used:
+                if font_used and "芫荽" not in font_used:
                     font_log[int(idx) + 1] = os.path.basename(font_used)
 
                 gi = idx % 6
@@ -996,41 +1000,41 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             st.session_state.last_params = sidebar_params.copy()
 
             custom_count = len(st.session_state.card_overrides)
-            st.success(f"?? 摰?嚗len(previews)} ??A4嚗銝?{custom_count} 撘萎蝙?典摰Ｚˊ?身摰?)
+            st.success(f"🎉 完成！{len(previews)} 頁 A4，其中 {custom_count} 張使用個別客製化設定。")
             if miss_list:
-                st.warning(f"?? {len(miss_list)} 蝑銝摨?嚗'??.join(miss_list[:20])}")
+                st.warning(f"⚠️ {len(miss_list)} 筆找不到底圖：{'、'.join(miss_list[:20])}")
             if font_log:
                 st.info(
-                    f"?對? {len(font_log)} 撘萄?????摮?嚗n"
-                    + "\n".join(f"  蝚?{n} 蝑???{f}" for n, f in list(font_log.items())[:10])
+                    f"ℹ️ {len(font_log)} 張卡片切換了備用字型：\n"
+                    + "\n".join(f"  第 {n} 筆 → {f}" for n, f in list(font_log.items())[:10])
                 )
 
 elif not (uploaded_csv and uploaded_zip):
-    st.info("? 隢銝?? csv ??zip 蝝???)
+    st.info("💡 請在上方分別拖入 csv 與 zip 素材包。")
 
 
-# ??????????????????????????????????????????????????????????????
-# 蝯?憿舐內
-# ??????????????????????????????????????????????????????????????
+# ══════════════════════════════════════════════════════════════
+# 結果顯示
+# ══════════════════════════════════════════════════════════════
 if st.session_state.pdf_data and st.session_state.preview_bytes_list:
     st.write("---")
     col_dl, col_view = st.columns([1, 2])
     with col_dl:
-        st.subheader("? 瑼?銝?")
+        st.subheader("📥 檔案下載")
         st.download_button(
-            label="?? 銝? 2x3 A4 摰?? PDF",
+            label="🍀 下載 2x3 A4 完美列印 PDF",
             data=st.session_state.pdf_data,
             file_name="soka_encouragement_cards_A4.pdf",
             mime="application/pdf",
             type="primary",
         )
-        st.info("? ???閮剔?祕?之撠?100%)????蝮格??)
+        st.info("💡 列印時請設為「實際大小(100%)」或「不縮放」。")
     with col_view:
-        st.subheader("?? A4 2x3 摰???汗")
+        st.subheader("👀 A4 2x3 完整排版預覽")
         total_p = len(st.session_state.preview_bytes_list)
-        page_select = st.slider("???汗?", 1, total_p, 1) if total_p > 1 else 1
-        st.write(f"?? 蝚?**{page_select}** / {total_p} ??)
+        page_select = st.slider("切換預覽頁數", 1, total_p, 1) if total_p > 1 else 1
+        st.write(f"📄 第 **{page_select}** / {total_p} 頁")
         st.image(
             st.session_state.preview_bytes_list[page_select - 1],
-            caption=f"蝚?{page_select} ??A4 撖血??",
+            caption=f"第 {page_select} 頁 A4 實印排版",
         )
