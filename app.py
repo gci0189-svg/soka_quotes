@@ -325,8 +325,13 @@ def generate_card(row, row_idx, zf, zip_index,
     raw_content = str(row.get('Content', '')).replace(' ', '')
 
     if custom_text is not None:
-        lines            = manual_wrap(custom_text)
-        check_text       = custom_text.replace('\n', '')
+        # 修正重點：若自訂文字包含手動換行 "\n" 則使用手動換行，否則仍使用智能斷行
+        if '\n' in custom_text:
+            lines = manual_wrap(custom_text)
+        else:
+            temp_font, _ = pick_font(custom_text, font_size)
+            lines = smart_wrap(custom_text, temp_font, 840, draw)
+        check_text = custom_text.replace('\n', '')
     else:
         check_text       = raw_content
         # 先用鏈中第一個可用字型算斷行（字型影響字寬）
