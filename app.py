@@ -324,35 +324,110 @@ def draw_text_fallback(draw, pos, text: str, size: int, preferred_path: str,
         img.alpha_composite(gl.filter(ImageFilter.GaussianBlur(radius=glow_str)))
         draw = ImageDraw.Draw(img, 'RGBA')
 
-    draw_runs(draw, (x, y), (r, g, b, 255), stroke=stroke_w, stroke_fill_arg=stroke_fill)# ══════════════════════════════════════════════════════════════
+    draw_runs(draw, (x, y), (r, g, b, 255), stroke=stroke_w, stroke_fill_arg=stroke_fill)
+
+DEFAULT_VISUAL_SETTINGS = {
+    "g_font_size_content": 46,
+    "g_font_size_source": 26,
+    "line_spacing": 1.6,
+    "text_color": "#FFFFFF",
+    "auto_darkness": False,
+    "bg_darkness": 0.0,
+    "stroke_width": 3,
+    "glow_strength": 0,
+    "show_cut_lines": True,
+}
+
+def visual_key(name: str) -> str:
+    return f"visual_{name}"
+
+def clamp_value(value, min_value, max_value):
+    return min(max(value, min_value), max_value)
+
+def normalize_visual_settings(value) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    clean = {}
+    try:
+        clean["g_font_size_content"] = int(clamp_value(int(value.get("g_font_size_content", 46)), 20, 70))
+    except Exception:
+        pass
+    try:
+        clean["g_font_size_source"] = int(clamp_value(int(value.get("g_font_size_source", 26)), 14, 40))
+    except Exception:
+        pass
+    try:
+        clean["line_spacing"] = round(float(clamp_value(float(value.get("line_spacing", 1.6)), 1.2, 2.5)), 1)
+    except Exception:
+        pass
+    color = value.get("text_color")
+    if isinstance(color, str) and re.match(r"^#[0-9a-fA-F]{6}$", color):
+        clean["text_color"] = color
+    if "auto_darkness" in value:
+        clean["auto_darkness"] = bool(value.get("auto_darkness"))
+    auto_darkness_value = clean.get("auto_darkness", bool(value.get("auto_darkness", False)))
+    try:
+        bg_value = float(value.get("bg_darkness", 0.0))
+        clean["bg_darkness"] = round(float(clamp_value(bg_value, -0.30 if auto_darkness_value else 0.0, 0.30 if auto_darkness_value else 1.0)), 2)
+    except Exception:
+        pass
+    try:
+        clean["stroke_width"] = int(clamp_value(int(value.get("stroke_width", 3)), 0, 5))
+    except Exception:
+        pass
+    try:
+        clean["glow_strength"] = int(clamp_value(int(value.get("glow_strength", 0)), 0, 8))
+    except Exception:
+        pass
+    if "show_cut_lines" in value:
+        clean["show_cut_lines"] = bool(value.get("show_cut_lines"))
+    return clean
+
+def apply_visual_settings(visual_settings: dict):
+    for k, v in normalize_visual_settings(visual_settings).items():
+        st.session_state[visual_key(k)] = v
+
+# ══════════════════════════════════════════════════════════════
 # 側邊欄
 # ══════════════════════════════════════════════════════════════
 st.sidebar.header("🎨 小卡視覺調整面板")
 
+if "_pending_visual_settings" in st.session_state:
+    apply_visual_settings(st.session_state.pop("_pending_visual_settings"))
+
+for _visual_name, _visual_default in DEFAULT_VISUAL_SETTINGS.items():
+    st.session_state.setdefault(visual_key(_visual_name), _visual_default)
+
 st.sidebar.markdown("**📝 全局文字設定**")
-g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 70, 46, step=2)
-g_font_size_source  = st.sidebar.slider("出處字型大小", 14, 40, 26, step=2)
-line_spacing        = st.sidebar.slider("行距倍數", 1.2, 2.5, 1.6, step=0.1)
-text_color          = st.sidebar.color_picker("文字顏色", "#FFFFFF")
+g_font_size_content = st.sidebar.slider("正文字型大小（全局）", 20, 70, step=2, key=visual_key("g_font_size_content"))
+g_font_size_source  = st.sidebar.slider("出處字型大小", 14, 40, step=2, key=visual_key("g_font_size_source"))
+line_spacing        = st.sidebar.slider("行距倍數", 1.2, 2.5, step=0.1, key=visual_key("line_spacing"))
+text_color          = st.sidebar.color_picker("文字顏色", key=visual_key("text_color"))
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**🌄 背景設定**")
-auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調整）", value=False)
+auto_darkness = st.sidebar.checkbox("✨ 智能自動遮罩（依底圖亮度調整）", key=visual_key("auto_darkness"))
 if auto_darkness:
+    st.session_state[visual_key("bg_darkness")] = clamp_value(st.session_state[visual_key("bg_darkness")], -0.30, 0.30)
     st.sidebar.caption("智能模式：依底圖亮度自動計算基準，再加下方偏移量。")
-    bg_darkness = st.sidebar.slider("手動微調偏移量（+ 加深 / - 減淺）",
-                                    -0.30, 0.30, 0.0, step=0.05)
+    bg_darkness = st.sidebar.slider(
+        "手動微調偏移量（+ 加深 / - 減淺）",
+        -0.30, 0.30, step=0.05, key=visual_key("bg_darkness")
+    )
 else:
-    bg_darkness = st.sidebar.slider("手動遮罩黯淡度（完全自訂）",
-                                    0.0, 1.0, 0.0, step=0.05)
+    st.session_state[visual_key("bg_darkness")] = clamp_value(st.session_state[visual_key("bg_darkness")], 0.0, 1.0)
+    bg_darkness = st.sidebar.slider(
+        "手動遮罩黯淡度（完全自訂）",
+        0.0, 1.0, step=0.05, key=visual_key("bg_darkness")
+    )
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
-stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 5, 3, step=1)
-glow_strength = st.sidebar.slider("文字發光強度（0=關閉）", 0, 8, 0, step=1)
+stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 5, step=1, key=visual_key("stroke_width"))
+glow_strength = st.sidebar.slider("文字發光強度（0=關閉）", 0, 8, step=1, key=visual_key("glow_strength"))
 
 st.sidebar.markdown("---")
-show_cut_lines = st.sidebar.checkbox("顯示 A4 裁切虛線", value=True)
+show_cut_lines = st.sidebar.checkbox("顯示 A4 裁切虛線", key=visual_key("show_cut_lines"))
 
 sidebar_params = dict(
     g_font_size_content=g_font_size_content,
@@ -731,6 +806,9 @@ if uploaded_csv and uploaded_zip:
         except Exception:
             pass
 
+    if "_settings_import_message" in st.session_state:
+        st.success(st.session_state.pop("_settings_import_message"))
+
     st.subheader("💾 個別卡片設定")
     setting_col1, setting_col2, setting_col3 = st.columns([1, 1, 1])
 
@@ -760,18 +838,23 @@ if uploaded_csv and uploaded_zip:
         if uploaded_settings is not None:
             try:
                 imported_overrides, meta = parse_uploaded_settings(uploaded_settings)
-                if not imported_overrides:
-                    st.warning("這份設定 JSON 沒有任何個別卡片設定（card_overrides 是空的），所以沒有可匯入的內容。")
-                else:
+                imported_visual_settings = normalize_visual_settings(meta.get("visual_settings") if isinstance(meta, dict) else {})
+                if imported_overrides:
                     st.session_state.card_overrides = imported_overrides
+                if imported_visual_settings:
+                    st.session_state["_pending_visual_settings"] = imported_visual_settings
+                if imported_overrides or imported_visual_settings:
                     save_card_overrides(
                         st.session_state.get("_dataset_key", ""),
                         st.session_state.card_overrides,
                         st.session_state.get("_csv_name", ""),
                         st.session_state.get("_zip_name", ""),
-                        sidebar_params,
+                        imported_visual_settings or sidebar_params,
                     )
-                    st.success(f"已匯入 {len(imported_overrides)} 張個別設定。")
+                    st.session_state["_settings_import_message"] = f"已匯入 {len(imported_overrides)} 張個別設定與 {len(imported_visual_settings)} 個全局視覺設定。"
+                    st.rerun()
+                else:
+                    st.warning("這份設定 JSON 沒有個別卡片設定，也沒有全局視覺設定，所以沒有可匯入的內容。")
             except ValueError as exc:
                 st.error(str(exc))
 
