@@ -24,11 +24,14 @@ SAVE_DIR = os.path.join(BASE_DIR, "saved_card_settings")
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 FONT_CHAIN = [
-    # 預設手寫字優先；若整句含缺字風險，整句切到完整中文字型。
-    "fonts/芫荽.ttf",
-    "芫荽.ttf",
-    "fonts/思源黑體 Medium.ttf",
-    "思源黑體 Medium.ttf",
+    # 字型優先順序：粗體黑體優先，提升小卡文字可讀性。
+    "soka_all_materials/思源黑體 Heavy.otf",
+    "fonts/思源黑體 Heavy.otf",
+    "思源黑體 Heavy.otf",
+    "soka_all_materials/源樣黑體 Heavy.otf",
+    "fonts/源樣黑體 Heavy.otf",
+    "源樣黑體 Heavy.otf",
+    "soka_all_materials/源泉圓體.otf",
     "fonts/源泉圓體.otf",
     "源泉圓體.otf",
     "fonts/NotoSansTC-Regular.ttf",
@@ -99,15 +102,11 @@ def text_has_all_glyphs(text: str, font_path: str, size: int) -> bool:
     return True
 
 def pick_font_for_text(text: str, size: int):
-    """整句切換字型：任一字不適合芫荽時，整句改用備用中文字型。"""
+    """整句切換字型：任一字不適合思源黑體 Heavy時，整句改用備用中文字型。"""
     text = str(text or '')
-    has_unsafe_char = any(ch in HANDWRITING_UNSAFE_CHARS for ch in text)
 
     for path in FONT_CHAIN:
         if not path:
-            continue
-        # 芫荽遇到高風險字時不要只補單字，直接讓整句使用下一個完整中文字型。
-        if has_unsafe_char and '芫荽' in path:
             continue
         if text_has_all_glyphs(text, path, size):
             font = load_font(path, size, _font_index(path))
@@ -116,8 +115,6 @@ def pick_font_for_text(text: str, size: int):
 
     # 最後保底：找得到哪個字型就先用哪個，至少避免 None。
     for path in FONT_CHAIN:
-        if has_unsafe_char and '芫荽' in path:
-            continue
         font = load_font(path, size, _font_index(path))
         if font:
             return font, path
@@ -903,10 +900,14 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
         c_left, c_right = st.columns([1, 1])
 
         with c_left:
-            preview_row = st.number_input(
+            preview_options = list(range(max_row + 1))
+            if st.session_state.get("preview_row_num") not in preview_options:
+                st.session_state.preview_row_num = 0
+            preview_row = st.selectbox(
                 "預覽第幾筆語錄（0 起算）",
-                min_value=0, max_value=max_row, value=0, step=1,
-                key="preview_row_num"
+                options=preview_options,
+                key="preview_row_num",
+                format_func=lambda n: str(n),
             )
             row_p    = df_p.iloc[int(preview_row)]
             row_key  = str(preview_row)
@@ -1078,7 +1079,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 )
                 if not matched:
                     miss_list.append(str(row.get('Image_Name', idx)))
-                if font_used and '芫荽' not in font_used:
+                if font_used and '思源黑體 Heavy' not in font_used:
                     font_log[int(idx) + 1] = os.path.basename(font_used)
 
                 gi    = idx % 6
