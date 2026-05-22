@@ -17,9 +17,10 @@ st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
 # ══════════════════════════════════════════════════════════════
 # GitHub fonts/ 目錄字型鏈（依優先順序）
 FONT_CHAIN = [
-    ("fonts/芫荽.ttf",               0),   # 主字型：文青手寫
-    ("fonts/NotoSansTC-Regular.ttf", 0),   # 備用 1：Noto TC
-    ("fonts/MSJH.ttf",               0),   # 備用 2：微軟正黑
+    ("fonts/思源黑體 Medium.ttf",     0),   # 主字型：思源黑體 Medium（清晰有力）
+    ("fonts/源樣黑體 Heavy.otf",      0),   # 備用 1：源樣黑體 Heavy（粗體強調）
+    ("fonts/源泉圓體.otf",            0),   # 備用 2：源泉圓體（圓潤）
+    ("fonts/芫荽.ttf",               0),   # 備用 3：芫荽手寫
     ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),  # 系統保底
 ]
 
@@ -543,7 +544,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 )
                 if not matched:
                     miss_list.append(str(row.get('Image_Name', idx)))
-                if font_name and '芫荽' not in font_name:
+                if font_name and '思源黑體' not in font_name:
                     font_log[int(idx) + 1] = font_name
 
                 gi    = idx % 6
