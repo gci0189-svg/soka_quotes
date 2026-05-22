@@ -15,66 +15,80 @@ st.title("🍀 創價鼓勵小卡 A4 2x3 產生器")
 # ══════════════════════════════════════════════════════════════
 # 字型系統：整句切換 Fallback
 # ══════════════════════════════════════════════════════════════
+# GitHub fonts/ 目錄字型鏈（依優先順序）
 FONT_CHAIN = [
-    "fonts/芫荽.ttf",          # 主字型：文青手寫
-    "fonts/NotoSansTC-Regular.ttf",  # 備用 1：Noto TC
-    "fonts/MSJH.ttf",          # 備用 2：微軟正黑（兜底）
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",  # 系統 Noto（最終保底）
+    ("fonts/芫荽.ttf",               0),   # 主字型：文青手寫
+    ("fonts/NotoSansTC-Regular.ttf", 0),   # 備用 1：Noto TC
+    ("fonts/MSJH.ttf",               0),   # 備用 2：微軟正黑
+    ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 2),  # 系統保底
 ]
 
-@st.cache_resource
-def load_font(path: str, size: int, index: int = 0):
-    """載入字型，失敗回傳 None。"""
-    try:
-        if path and os.path.exists(path):
-            return ImageFont.truetype(path, size, index=index)
-    except Exception:
-        pass
-    return None
+# module-level 字型快取（不用 st.cache，避免序列化問題）
+_font_obj_cache: dict = {}
 
-def _font_index(path: str) -> int:
-    """NotoSansCJK .ttc 需要 index=2 才是 TC。"""
-    if "NotoSansCJK" in path and path.endswith(".ttc"):
-        return 2
-    return 0
-
-@st.cache_data
-def text_has_all_glyphs(text: str, font_path: str, size: int) -> bool:
-    """
-    整句檢查：只要有任何一個字元在此字型缺字，就回傳 False。
-    使用 getmask().getbbox() — None 或空代表缺字。
-    """
-    font = load_font(font_path, size, _font_index(font_path))
-    if font is None:
-        return False
-    for ch in text:
-        if ch in (' ', '\n', '\u200b'):
-            continue
+def _get_font(path: str, size: int, index: int = 0):
+    """載入字型物件，快取於 module level dict，失敗回傳 None。"""
+    key = (path, size, index)
+    if key not in _font_obj_cache:
         try:
-            bbox = font.getmask(ch).getbbox()
-            if bbox is None or (bbox[2] - bbox[0]) <= 1 or (bbox[3] - bbox[1]) <= 1:
-                return False
+            if path and os.path.exists(path):
+                _font_obj_cache[key] = ImageFont.truetype(path, size, index=index)
+            else:
+                _font_obj_cache[key] = None
         except Exception:
+            _font_obj_cache[key] = None
+    return _font_obj_cache[key]
+
+# module-level 缺字偵測快取（key = (font_path, char)）
+_glyph_ok_cache: dict = {}
+
+def _char_renders(font_obj, char: str) -> bool:
+    """
+    渲染比較法偵測缺字（最可靠）：
+    把字元畫到小黑圖，若亮像素 > 8 個就代表有字形。
+    結果快取在 _glyph_ok_cache。
+    """
+    if font_obj is None:
+        return False
+    key = (id(font_obj), char)
+    if key not in _glyph_ok_cache:
+        try:
+            img = Image.new('L', (60, 60), 0)
+            d   = ImageDraw.Draw(img)
+            d.text((5, 5), char, font=font_obj, fill=255)
+            bright = sum(1 for p in img.getdata() if p > 30)
+            _glyph_ok_cache[key] = bright > 8
+        except Exception:
+            _glyph_ok_cache[key] = False
+    return _glyph_ok_cache[key]
+
+def _text_all_render(font_obj, text: str) -> bool:
+    """整句掃描：只要有一個字元無法渲染就回傳 False。"""
+    for ch in text:
+        if ch in (' ', '\n', '\u200b', '\r'):
+            continue
+        if not _char_renders(font_obj, ch):
             return False
     return True
 
-def pick_font_for_text(text: str, size: int):
+def pick_font(text: str, size: int):
     """
     整句切換 Fallback：
-    依 FONT_CHAIN 順序找第一個能完整渲染整句的字型。
-    回傳 (font_object, font_path_used)
+    依 FONT_CHAIN 順序，找第一個能完整渲染整句的字型。
+    回傳 (font_object, font_basename)
     """
-    for path in FONT_CHAIN:
-        if not path:
+    for path, idx in FONT_CHAIN:
+        font = _get_font(path, size, idx)
+        if font is None:
             continue
-        if text_has_all_glyphs(text, path, size):
-            font = load_font(path, size, _font_index(path))
-            if font:
-                return font, path
-    # 終極保底：用系統 Noto，不管缺不缺
-    path = FONT_CHAIN[-1]
-    font = load_font(path, size, _font_index(path))
-    return font, path
+        if _text_all_render(font, text):
+            return font, os.path.basename(path)
+    # 終極保底：直接回傳最後一個能載入的字型
+    for path, idx in reversed(FONT_CHAIN):
+        font = _get_font(path, size, idx)
+        if font:
+            return font, os.path.basename(path)
+    return ImageFont.load_default(), "default"
 
 # ══════════════════════════════════════════════════════════════
 # 側邊欄
@@ -132,7 +146,7 @@ for k, v in [
         st.session_state[k] = v
 
 # ══════════════════════════════════════════════════════════════
-# 工具函式
+# 核心工具函式
 # ══════════════════════════════════════════════════════════════
 
 def hex_to_rgb(hex_color: str) -> tuple:
@@ -147,7 +161,6 @@ def smart_dark(img_rgb: Image.Image) -> float:
     return round(min(max(0.20 + (avg / 255) * 0.35, 0.15), 0.55), 2)
 
 def smart_wrap(text: str, font, max_w: int, draw) -> list:
-    """智能斷行：標點優先 → 均衡分行 → 短尾合併。"""
     BREAK_AFTER = set('。！？…；')
     chunks, buf = [], ''
     for ch in text:
@@ -157,26 +170,22 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
     if buf:
         chunks.append(buf)
 
-    def width(t):
-        return draw.textbbox((0, 0), t, font=font)[2]
+    def w(t): return draw.textbbox((0, 0), t, font=font)[2]
 
     lines, cur = [], ''
     for chunk in chunks:
-        if width(cur + chunk) <= max_w:
+        if w(cur + chunk) <= max_w:
             cur += chunk
         else:
-            if cur:
-                lines.append(cur); cur = ''
+            if cur: lines.append(cur); cur = ''
             for ch in chunk:
-                if width(cur + ch) <= max_w:
+                if w(cur + ch) <= max_w:
                     cur += ch
                 else:
                     if cur: lines.append(cur)
                     cur = ch
-    if cur:
-        lines.append(cur)
+    if cur: lines.append(cur)
 
-    # 只有1行且偏長 → 嘗試平均拆2行
     if len(lines) == 1 and len(lines[0]) >= 12:
         s = lines[0]; mid = len(s) // 2; best = mid
         for off in range(0, mid + 1):
@@ -188,7 +197,6 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
             break
         lines = [s[:best], s[best:]] if s[best:] else [s]
 
-    # 最後一行太短 → 合併再均分
     if len(lines) >= 2 and len(lines[-1]) <= 3:
         merged = lines[-2] + lines[-1]; mid = len(merged) // 2
         lines  = lines[:-2] + [merged[:mid], merged[mid:]]
@@ -196,23 +204,22 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
     return lines if lines else [text]
 
 def manual_wrap(text: str) -> list:
-    """手動斷行：依 \\n 分行，不做任何智能處理。"""
     return [l for l in text.split('\n') if l.strip()] or [text]
 
-def draw_text_pro(draw, pos, text, font, fill_rgb, stroke_w=3, img=None, glow_str=0):
-    """描邊 + 發光文字渲染。整句使用同一個 font 物件，視覺完全統一。"""
+def draw_text_pro(draw, img, pos, text, font, fill_rgb, stroke_w=3, glow_str=0):
+    """整句用同一 font 物件渲染，確保視覺統一。"""
     x, y = pos
     r, g, b = fill_rgb
     bright = r * 0.299 + g * 0.587 + b * 0.114
     sc = (15, 15, 15, 220) if bright > 128 else (240, 240, 240, 200)
 
     # 發光層
-    if glow_str > 0 and img is not None:
+    if glow_str > 0:
         gl = Image.new('RGBA', img.size, (0, 0, 0, 0))
         gd = ImageDraw.Draw(gl)
-        gd.text((x, y), text, font=font, fill=(r, g, b, 160))
+        gd.text((x, y), text, font=font, fill=(r, g, b, 150))
         img.alpha_composite(gl.filter(ImageFilter.GaussianBlur(radius=glow_str)))
-        draw = ImageDraw.Draw(img, 'RGBA')  # 重建 draw after composite
+        draw = ImageDraw.Draw(img, 'RGBA')
 
     # 描邊層
     if stroke_w > 0:
@@ -223,6 +230,7 @@ def draw_text_pro(draw, pos, text, font, fill_rgb, stroke_w=3, img=None, glow_st
 
     # 主色層
     draw.text((x, y), text, font=font, fill=(r, g, b, 255))
+    return draw  # 回傳可能已重建的 draw
 
 def build_zip_index(zip_bytes: bytes):
     IMG_EXT = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif'}
@@ -283,18 +291,13 @@ def generate_card(row, row_idx, zf, zip_index,
                   bg_darkness, auto_darkness_on,
                   text_color_hex, line_spacing_mult,
                   stroke_w, glow_str, overrides: dict):
-    """
-    overrides[str(row_idx)] 可包含：
-      'content'  : 手動斷句文字（含 \\n）
-      'font_size': 單張正文字體大小覆蓋
-    字型使用整句切換 Fallback，同一句絕不混用兩種字型。
-    """
+
     override    = overrides.get(str(row_idx), {})
     custom_text = override.get('content', None)
     font_size   = override.get('font_size', g_size_content)
 
     # ── 底圖 ──────────────────────────────────────────────────
-    matched = find_in_index(row['Image_Name'], zip_index)
+    matched = find_in_index(str(row.get('Image_Name', '')), zip_index)
     if matched:
         try:
             card = Image.open(io.BytesIO(zf.read(matched))).convert('RGBA')
@@ -321,23 +324,23 @@ def generate_card(row, row_idx, zf, zip_index,
     raw_content = str(row.get('Content', '')).replace(' ', '')
 
     if custom_text is not None:
-        lines = manual_wrap(custom_text)
-        full_text_for_check = custom_text.replace('\n', '')
+        lines            = manual_wrap(custom_text)
+        check_text       = custom_text.replace('\n', '')
     else:
-        # 先用主字型跑 smart_wrap 決定斷行，再決定字型
-        temp_font, _ = pick_font_for_text(raw_content, font_size)
-        lines        = smart_wrap(raw_content, temp_font, 840, draw)
-        full_text_for_check = raw_content
+        check_text       = raw_content
+        # 先用鏈中第一個可用字型算斷行（字型影響字寬）
+        temp_font, _     = pick_font(check_text, font_size)
+        lines            = smart_wrap(raw_content, temp_font, 840, draw)
 
-    # 整句決定用哪個字型（一張卡全部行用同一字型）
-    font_content, font_used = pick_font_for_text(full_text_for_check, font_size)
+    # 整句決定最終字型（整張卡正文全部用這個）
+    font_content, font_name = pick_font(check_text, font_size)
 
-    # ── 出處字型（整句切換）──────────────────────────────────
+    # ── 出處：同樣整句切換 ────────────────────────────────────
     src = str(row.get('Source', ''))
     if src and src != 'nan':
-        font_source, _ = pick_font_for_text(src, size_source)
+        font_source, _ = pick_font(src, size_source)
     else:
-        font_source, _ = pick_font_for_text('', size_source)
+        font_source    = font_content
 
     # ── 繪製正文 ──────────────────────────────────────────────
     bh      = draw.textbbox((0, 0), '高', font=font_content)
@@ -349,18 +352,17 @@ def generate_card(row, row_idx, zf, zip_index,
         bx = draw.textbbox((0, 0), line, font=font_content)
         x  = (1000 - (bx[2] - bx[0])) / 2
         y  = start_y + i * lh
-        draw_text_pro(draw, (x, y), line, font_content, fill_rgb,
-                      stroke_w=stroke_w, img=card, glow_str=glow_str)
-        draw = ImageDraw.Draw(card, 'RGBA')  # 發光後重建
+        draw = draw_text_pro(draw, card, (x, y), line, font_content,
+                             fill_rgb, stroke_w=stroke_w, glow_str=glow_str)
 
     # ── 繪製出處 ──────────────────────────────────────────────
     if src and src != 'nan':
         bs = draw.textbbox((0, 0), src, font=font_source)
         xs = (1000 - (bs[2] - bs[0])) / 2
-        draw_text_pro(draw, (xs, 900), src, font_source, fill_rgb,
-                      stroke_w=stroke_w, img=card, glow_str=glow_str)
+        draw = draw_text_pro(draw, card, (xs, 900), src, font_source,
+                             fill_rgb, stroke_w=stroke_w, glow_str=glow_str)
 
-    return card.convert('RGB'), matched, actual, font_used
+    return card.convert('RGB'), matched, actual, font_name
 
 # ══════════════════════════════════════════════════════════════
 # 快取 zip & csv
@@ -387,7 +389,7 @@ if uploaded_csv and uploaded_zip:
             st.code("\n".join(paths_d[:20]))
             rows_out = []
             for _, r in df_d.head(10).iterrows():
-                hit = find_in_index(r['Image_Name'], idx_d)
+                hit = find_in_index(str(r['Image_Name']), idx_d)
                 rows_out.append({"Image_Name": str(r['Image_Name']),
                                  "配對結果": hit or "❌ 找不到"})
             st.table(pd.DataFrame(rows_out))
@@ -402,7 +404,6 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
 
     tab_single, tab_a4 = st.tabs(["🖼️ 單張預覽 & 個別客製化", "📄 A4 整頁預覽（前6筆）"])
 
-    # ── 單張預覽 ──────────────────────────────────────────────
     with tab_single:
         c_left, c_right = st.columns([1, 1])
 
@@ -419,26 +420,23 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             st.markdown("---")
             st.markdown("**✏️ 個別卡片客製化**")
 
-            # 文字編輯框
             default_text = override.get(
                 'content',
                 str(row_p.get('Content', '')).replace(' ', '')
             )
             custom_text = st.text_area(
                 "手動斷句（Enter 換行；清空則恢復智能斷行）",
-                value=default_text,
-                height=140,
-                key=f"text_area_{preview_row}",
-                help="直接按 Enter 換行。清空則自動使用智能斷行。"
+                value=default_text, height=140,
+                key=f"ta_{preview_row}",
+                help="直接按 Enter 換行。清空文字框則使用智能斷行。"
             )
 
-            # 個別字體大小
-            current_size = override.get('font_size', g_font_size_content)
+            current_size = int(override.get('font_size', g_font_size_content))
             custom_size  = st.slider(
                 "此卡片正文字體大小",
                 min_value=20, max_value=70,
-                value=int(current_size), step=2,
-                key=f"size_slider_{preview_row}"
+                value=current_size, step=2,
+                key=f"ss_{preview_row}"
             )
 
             col_save, col_reset = st.columns(2)
@@ -451,13 +449,11 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                         entry['font_size'] = custom_size
                     st.session_state.card_overrides[row_key] = entry
                     st.success(f"✅ 第 {preview_row} 筆已儲存！")
-
             with col_reset:
                 if st.button("🔄 還原預設", key=f"reset_{preview_row}"):
                     st.session_state.card_overrides.pop(row_key, None)
                     st.success("已還原為全局設定。")
 
-            # 已客製化清單
             if st.session_state.card_overrides:
                 st.markdown("---")
                 st.markdown(f"**📋 已客製化：{len(st.session_state.card_overrides)} 張**")
@@ -469,13 +465,12 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                     st.caption(f"第 {k} 筆：{'、'.join(tags)}")
 
         with c_right:
-            # 即時預覽：用 text_area 當前值（未必已儲存）
             live_override = {}
             if custom_text.strip():
                 live_override['content']   = custom_text
             live_override['font_size'] = custom_size
 
-            card_p, _, used_dark, font_used = generate_card(
+            card_p, _, used_dark, font_name = generate_card(
                 row_p, preview_row, zf_p, idx_p,
                 custom_size, g_font_size_source,
                 bg_darkness, auto_darkness,
@@ -484,14 +479,10 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             )
             buf_p = io.BytesIO()
             card_p.save(buf_p, format='JPEG', quality=88)
-
-            # 顯示使用哪個字型
-            font_label = os.path.basename(font_used) if font_used else "預設"
             st.image(buf_p.getvalue(),
-                     caption=f"第 {preview_row} 筆 ｜ 遮罩 {used_dark:.2f} ｜ 字體 {custom_size} ｜ 字型：{font_label}",
+                     caption=f"第 {preview_row} 筆 ｜ 遮罩 {used_dark:.2f} ｜ 字體 {custom_size} ｜ 字型：{font_name}",
                      width=420)
 
-    # ── A4 整頁預覽（前6筆）────────────────────────────────
     with tab_a4:
         st.caption("⚡ 即時渲染前 6 筆，確認整頁視覺效果。")
         preview_cards = []
@@ -514,7 +505,8 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             yi = int((my + (gi // 2) * ch) * 4)
             page.paste(cp.resize((cw*4, ch*4), resample=Image.Resampling.BILINEAR), (xi, yi))
             if show_cut_lines:
-                pd_draw.rectangle([xi, yi, xi+cw*4, yi+ch*4], outline=(180, 180, 180), width=1)
+                pd_draw.rectangle([xi, yi, xi+cw*4, yi+ch*4],
+                                   outline=(180, 180, 180), width=1)
         buf_a4 = io.BytesIO()
         page.resize((420, 594), resample=Image.Resampling.BILINEAR).save(buf_a4, 'JPEG', quality=82)
         st.image(buf_a4.getvalue(), caption="前 6 筆 A4 整頁預覽", width=500)
@@ -527,7 +519,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
     if st.button("🚀 開始批次排版並生成 PDF", type="primary"):
         with st.spinner("正在建構 A4 2x3 排版..."):
             df        = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
-            zip_index_b, all_paths_b, zf_b = build_zip_index(st.session_state.zip_bytes_cache)
+            zip_idx_b, all_paths_b, zf_b = build_zip_index(st.session_state.zip_bytes_cache)
             st.sidebar.caption(f"📦 ZIP {len(all_paths_b)} 張")
 
             pdf_buf  = io.BytesIO()
@@ -535,15 +527,15 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             cur_page = Image.new('RGB', (840, 1188), (255, 255, 255))
             pg_draw  = ImageDraw.Draw(cur_page)
             mx, my, cw, ch = 10, 15, 95, 89
-            total    = len(df)
-            pbar     = st.progress(0)
-            previews = []
+            total     = len(df)
+            pbar      = st.progress(0)
+            previews  = []
             miss_list = []
-            font_log  = {}   # 記錄哪些卡片用了備用字型
+            font_log  = {}
 
             for idx, row in df.iterrows():
-                card_pil, matched, _, font_used = generate_card(
-                    row, idx, zf_b, zip_index_b,
+                card_pil, matched, _, font_name = generate_card(
+                    row, idx, zf_b, zip_idx_b,
                     g_font_size_content, g_font_size_source,
                     bg_darkness, auto_darkness,
                     text_color, line_spacing, stroke_width, glow_strength,
@@ -551,8 +543,8 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 )
                 if not matched:
                     miss_list.append(str(row.get('Image_Name', idx)))
-                if font_used and '芫荽' not in font_used:
-                    font_log[int(idx) + 1] = os.path.basename(font_used)
+                if font_name and '芫荽' not in font_name:
+                    font_log[int(idx) + 1] = font_name
 
                 gi    = idx % 6
                 col_i = gi % 2
@@ -604,7 +596,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 st.warning(f"⚠️ {len(miss_list)} 筆找不到底圖：{'、'.join(miss_list[:20])}")
             if font_log:
                 st.info(
-                    f"ℹ️ {len(font_log)} 張卡片切換了備用字型：\n" +
+                    f"ℹ️ {len(font_log)} 張切換了備用字型：\n" +
                     "\n".join(f"  第 {n} 筆 → {f}" for n, f in list(font_log.items())[:10])
                 )
 
