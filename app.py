@@ -413,13 +413,14 @@ def normalize_overrides(value) -> dict:
             clean[str(k)] = entry
     return clean
 
-def make_settings_payload(overrides: dict, dataset_key: str = "", csv_name: str = "", zip_name: str = "") -> dict:
+def make_settings_payload(overrides: dict, dataset_key: str = "", csv_name: str = "", zip_name: str = "", visual_settings=None) -> dict:
     return {
         "version": 1,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
         "dataset_key": dataset_key,
         "csv_name": csv_name,
         "zip_name": zip_name,
+        "visual_settings": dict(visual_settings or {}),
         "card_overrides": normalize_overrides(overrides),
     }
 
@@ -436,10 +437,10 @@ def load_card_overrides(dataset_key: str) -> dict:
     except Exception:
         return {}
 
-def save_card_overrides(dataset_key: str, overrides: dict, csv_name: str = "", zip_name: str = ""):
+def save_card_overrides(dataset_key: str, overrides: dict, csv_name: str = "", zip_name: str = "", visual_settings=None):
     if not dataset_key:
         return
-    payload = make_settings_payload(overrides, dataset_key, csv_name, zip_name)
+    payload = make_settings_payload(overrides, dataset_key, csv_name, zip_name, visual_settings)
     with open(settings_path(dataset_key), "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
@@ -708,6 +709,28 @@ if uploaded_csv and uploaded_zip:
 # 設定檔匯入 / 匯出
 # ══════════════════════════════════════════════════════════════
 if uploaded_csv and uploaded_zip:
+    if st.session_state.get("csv_cache") is not None and "preview_row_num" in st.session_state:
+        try:
+            df_sync = pd.read_csv(io.BytesIO(st.session_state.csv_cache))
+            preview_row_sync = int(st.session_state.get("preview_row_num", 0))
+            if 0 <= preview_row_sync < len(df_sync):
+                row_key_sync = str(preview_row_sync)
+                original_text_sync = str(df_sync.iloc[preview_row_sync].get("Content", "")).replace(" ", "")
+                custom_text_sync = st.session_state.get(f"text_area_{preview_row_sync}", original_text_sync)
+                use_custom_size_sync = st.session_state.get(f"use_custom_size_{preview_row_sync}", False)
+                custom_size_sync = st.session_state.get(f"size_slider_{preview_row_sync}", g_font_size_content)
+                entry_sync = {}
+                if isinstance(custom_text_sync, str) and custom_text_sync.strip() and custom_text_sync != original_text_sync:
+                    entry_sync["content"] = custom_text_sync
+                if use_custom_size_sync:
+                    entry_sync["font_size"] = int(custom_size_sync)
+                if entry_sync:
+                    st.session_state.card_overrides[row_key_sync] = entry_sync
+                else:
+                    st.session_state.card_overrides.pop(row_key_sync, None)
+        except Exception:
+            pass
+
     st.subheader("💾 個別卡片設定")
     setting_col1, setting_col2, setting_col3 = st.columns([1, 1, 1])
 
@@ -717,6 +740,7 @@ if uploaded_csv and uploaded_zip:
             st.session_state.get("_dataset_key", ""),
             st.session_state.get("_csv_name", ""),
             st.session_state.get("_zip_name", ""),
+            sidebar_params,
         )
         st.download_button(
             "⬇️ 下載設定 JSON",
@@ -745,6 +769,7 @@ if uploaded_csv and uploaded_zip:
                         st.session_state.card_overrides,
                         st.session_state.get("_csv_name", ""),
                         st.session_state.get("_zip_name", ""),
+                        sidebar_params,
                     )
                     st.success(f"已匯入 {len(imported_overrides)} 張個別設定。")
             except ValueError as exc:
@@ -759,6 +784,7 @@ if uploaded_csv and uploaded_zip:
                 st.session_state.card_overrides,
                 st.session_state.get("_csv_name", ""),
                 st.session_state.get("_zip_name", ""),
+                sidebar_params,
             )
             st.rerun()
 
@@ -857,6 +883,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 st.session_state.card_overrides,
                 st.session_state.get("_csv_name", ""),
                 st.session_state.get("_zip_name", ""),
+                sidebar_params,
             )
 
             col_save, col_reset = st.columns(2)
@@ -872,6 +899,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                         st.session_state.card_overrides,
                         st.session_state.get("_csv_name", ""),
                         st.session_state.get("_zip_name", ""),
+                        sidebar_params,
                     )
                     st.rerun()
 
