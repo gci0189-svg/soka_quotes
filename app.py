@@ -45,20 +45,51 @@ _glyph_ok_cache: dict = {}
 
 def _char_renders(font_obj, char: str) -> bool:
     """
-    渲染比較法偵測缺字（最可靠）：
-    把字元畫到小黑圖，若亮像素 > 8 個就代表有字形。
-    結果快取在 _glyph_ok_cache。
+    特徵比對法偵測缺字（極高準確度）：
+    比對目標字元與該字型專屬的「缺字預留字元（如 \\ufffd, \\u0000）」渲染圖是否相同。
+    若相同，或亮像素極少，則判定為不支援。
     """
     if font_obj is None:
         return False
     key = (id(font_obj), char)
     if key not in _glyph_ok_cache:
         try:
+            # 1. 渲染目標字元
             img = Image.new('L', (60, 60), 0)
             d   = ImageDraw.Draw(img)
             d.text((5, 5), char, font=font_obj, fill=255)
-            bright = sum(1 for p in img.getdata() if p > 30)
-            _glyph_ok_cache[key] = bright > 8
+            data = list(img.getdata())
+            bright = sum(1 for p in data if p > 30)
+            
+            # 若基本上無亮度（極少亮點），代表為無法渲染的空白
+            if bright <= 3:
+                _glyph_ok_cache[key] = False
+                return False
+            
+            # 2. 獲取/快取該字型的兩種常見「缺字豆腐塊/替代字元」渲染特徵
+            tofu1_key = f"tofu1_{id(font_obj)}"  # \ufffd (常見替代字元)
+            tofu2_key = f"tofu2_{id(font_obj)}"  # \u0000 (空控制字元)
+            
+            if tofu1_key not in _glyph_ok_cache:
+                img_t1 = Image.new('L', (60, 60), 0)
+                d_t1   = ImageDraw.Draw(img_t1)
+                d_t1.text((5, 5), "\ufffd", font=font_obj, fill=255)
+                _glyph_ok_cache[tofu1_key] = list(img_t1.getdata())
+                
+            if tofu2_key not in _glyph_ok_cache:
+                img_t2 = Image.new('L', (60, 60), 0)
+                d_t2   = ImageDraw.Draw(img_t2)
+                d_t2.text((5, 5), "\u0000", font=font_obj, fill=255)
+                _glyph_ok_cache[tofu2_key] = list(img_t2.getdata())
+            
+            tofu1_data = _glyph_ok_cache[tofu1_key]
+            tofu2_data = _glyph_ok_cache[tofu2_key]
+            
+            # 3. 如果目標字元的渲染結果與任一種缺字豆腐塊特徵完全一致，代表該字型不支援
+            if data == tofu1_data or data == tofu2_data:
+                _glyph_ok_cache[key] = False
+            else:
+                _glyph_ok_cache[key] = True
         except Exception:
             _glyph_ok_cache[key] = False
     return _glyph_ok_cache[key]
@@ -325,7 +356,6 @@ def generate_card(row, row_idx, zf, zip_index,
     raw_content = str(row.get('Content', '')).replace(' ', '')
 
     if custom_text is not None:
-        # 修正重點：若自訂文字包含手動換行 "\n" 則使用手動換行，否則仍使用智能斷行
         if '\n' in custom_text:
             lines = manual_wrap(custom_text)
         else:
