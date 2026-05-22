@@ -900,16 +900,16 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
         c_left, c_right = st.columns([1, 1])
 
         with c_left:
-            preview_options = list(range(max_row + 1))
-            if st.session_state.get("preview_row_num") not in preview_options:
+            if st.session_state.get("preview_row_num", 0) > max_row:
                 st.session_state.preview_row_num = 0
-            preview_row = st.selectbox(
+            preview_row = int(st.slider(
                 "預覽第幾筆語錄（0 起算）",
-                options=preview_options,
+                min_value=0,
+                max_value=max_row,
+                step=1,
                 key="preview_row_num",
-                format_func=lambda n: str(n),
-            )
-            row_p    = df_p.iloc[int(preview_row)]
+            ))
+            row_p    = df_p.iloc[preview_row]
             row_key  = str(preview_row)
             override = st.session_state.card_overrides.get(row_key, {})
 
@@ -1003,7 +1003,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             live_override = entry.copy()
             live_override['font_size'] = custom_size
 
-            card_p, _, used_dark, font_used = generate_card(
+            card_p, matched_preview, used_dark, font_used = generate_card(
                 row_p, preview_row, zf_p, idx_p,
                 custom_size, g_font_size_source,
                 bg_darkness, auto_darkness,
@@ -1015,9 +1015,17 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
 
             # 顯示使用哪個字型
             font_label = os.path.basename(font_used) if font_used else "預設"
-            st.image(buf_p.getvalue(),
-                     caption=f"第 {preview_row} 筆 ｜ 遮罩 {used_dark:.2f} ｜ 字體 {custom_size} ｜ 字型：{font_label}",
-                     width=420)
+            image_name_label = str(row_p.get("Image_Name", ""))
+            matched_label = os.path.basename(matched_preview) if matched_preview else "找不到底圖"
+            st.image(
+                buf_p.getvalue(),
+                caption=(
+                    f"第 {preview_row} 筆 ｜ CSV 圖名：{image_name_label} ｜ "
+                    f"ZIP 配對：{matched_label} ｜ 遮罩 {used_dark:.2f} ｜ "
+                    f"字體 {custom_size} ｜ 字型：{font_label}"
+                ),
+                width=420,
+            )
 
     # ── A4 整頁預覽（前6筆）────────────────────────────────
     with tab_a4:
