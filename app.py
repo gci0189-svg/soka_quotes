@@ -178,7 +178,7 @@ for k, v in [
         st.session_state[k] = v
 
 # ══════════════════════════════════════════════════════════════
-# 核心智慧排版工具函式 (全新中文避頭尾自適應演算法)
+# 核心智慧排版與語意感知拆分函式
 # ══════════════════════════════════════════════════════════════
 
 def hex_to_rgb(hex_color: str) -> tuple:
@@ -192,9 +192,46 @@ def smart_dark(img_rgb: Image.Image) -> float:
     avg  = sum(data) / len(data)
     return round(min(max(0.20 + (avg / 255) * 0.35, 0.15), 0.55), 2)
 
+def find_semantic_split(text: str, mid: int) -> int:
+    """
+    尋找最適當的中文語法斷句點。
+    從中間點向左右各 4 個字元進行掃描，尋找關係詞、助詞與虛詞，保護雙字詞不被拆分。
+    """
+    # 適合在「其後」斷開的字元（助詞、連詞、關係詞、介詞）
+    BREAK_AFTER_CHARS = set('的之與和或而及在於後前中')
+    # 適合在「其前」斷開的字元（動詞、副詞、語氣標記）
+    BREAK_BEFORE_CHARS = set('是被將以就要會')
+    
+    best_idx = mid
+    best_score = -1
+    
+    # 向左右兩側延伸掃描 (半徑為 4)
+    for offset in range(0, 5):
+        for sign in [-1, 1]:
+            idx = mid + sign * offset
+            if 1 <= idx < len(text):
+                char = text[idx]
+                prev_char = text[idx - 1]
+                
+                score = 0
+                if prev_char in BREAK_AFTER_CHARS:
+                    score = 3       # 高優先級：拆分在助詞或關係詞之後
+                elif char in BREAK_BEFORE_CHARS:
+                    score = 2       # 中高優先級：拆分在動詞或副詞之前
+                elif char in '「『（':
+                    score = 1.5     # 中級優先級：拆分在引號前
+                elif prev_char in '」』）':
+                    score = 1.5     # 中級優先級：拆分在引號後
+                    
+                if score > best_score:
+                    best_score = score
+                    best_idx = idx
+                    
+    return best_idx
+
 def smart_wrap(text: str, font, max_w: int, draw) -> list:
     """
-    智慧子句優先自適應排版演算法 (支援中文避頭尾與均勻切分)
+    智慧子句優先自適應排版演算法 (支援語意特徵感知與中文避頭尾)
     """
     # 避頭字元
     PUNCT_START_FORBIDDEN = set('，、。！？；：」』）｝〉》】」”’）,.;!?﹐︰＇＂）］｝〉》」』】﹞－_—')
@@ -206,6 +243,10 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
     text = text.strip()
     if not text:
         return []
+        
+    # 如果整行放得下，直接返回單行
+    if w(text) <= max_w:
+        return [text]
         
     # 1. 依中文標點符號，保留標點將整句切分為天然子句
     pattern = re.compile(r'([^，、。！？；：﹐\n]+[，、。！？；：﹐\n]*)')
@@ -222,15 +263,18 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
         if not clause:
             continue
             
-        # 如果子句寬度在小卡安全限制內，直接作為完整的一行
+        # 如果子句寬度在限制內，直接作為完整的一行
         if w(clause) <= max_w:
             final_lines.append(clause)
         else:
-            # 如果單個子句過長，則從中間點對稱且均勻地切分成兩行或多行
+            # 如果單個子句過長，則使用語意感知演算法切開
             remaining = clause
             while w(remaining) > max_w:
                 n = len(remaining)
                 mid = n // 2
+                
+                # 基於漢語法特徵調整最和諧的斷句位置
+                mid = find_semantic_split(remaining, mid)
                 
                 # 避頭：避免切分後，新行的開頭字元出現在禁忌清單中
                 while mid < n and remaining[mid] in PUNCT_START_FORBIDDEN:
@@ -239,6 +283,10 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
                 # 避尾：避免切分後，當前行末尾出現前括號等禁忌字元
                 while mid > 1 and remaining[mid - 1] in PUNCT_END_FORBIDDEN:
                     mid -= 1
+                
+                # 安全保護，避免邊界錯誤
+                if mid <= 0 or mid >= n:
+                    mid = n // 2
                     
                 # 切出前半段
                 part = remaining[:mid]
