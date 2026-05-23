@@ -438,14 +438,16 @@ def generate_card(row, row_idx, zf, zip_index,
         if '\n' in custom_text:
             lines = manual_wrap(custom_text)
         else:
+            # 調整：此處也採用優化後的 880 寬度限制
             temp_font, _ = pick_font(custom_text, font_size)
-            lines = smart_wrap(custom_text, temp_font, 840, draw)
+            lines = smart_wrap(custom_text, temp_font, 880, draw)
         check_text = custom_text.replace('\n', '')
     else:
         check_text       = raw_content
         # 先用鏈中第一個可用字型算斷行（字型影響字寬）
+        # 將安全寬度上限從 840 提高至 880，以完整容納 15-16 個字而免遭無謂切分
         temp_font, _     = pick_font(check_text, font_size)
-        lines            = smart_wrap(raw_content, temp_font, 840, draw)
+        lines            = smart_wrap(raw_content, temp_font, 880, draw)
 
     # 整句決定最終字型（整張卡正文全部用這個）
     font_content, font_name = pick_font(check_text, font_size)
@@ -626,6 +628,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             live_override['font_size'] = custom_size
             live_override['source']    = custom_source  # 即時預覽出處變更
 
+            # 帶入 880 限制進行即時預覽
             card_p, _, used_dark, font_name = generate_card(
                 row_p, preview_row, zf_p, idx_p,
                 custom_size, g_font_size_source,
