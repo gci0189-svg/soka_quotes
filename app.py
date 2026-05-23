@@ -123,7 +123,7 @@ def pick_font(text: str, size: int):
     return ImageFont.load_default(), "default"
 
 # ══════════════════════════════════════════════════════════════
-# 側邊欄
+# 側邊欄 (已依需求調整範圍與預設值)
 # ══════════════════════════════════════════════════════════════
 st.sidebar.header("🎨 小卡視覺調整面板")
 
@@ -178,7 +178,7 @@ for k, v in [
         st.session_state[k] = v
 
 # ══════════════════════════════════════════════════════════════
-# 核心工具函式
+# 核心智慧排版工具函式 (全新中文避頭尾自適應演算法)
 # ══════════════════════════════════════════════════════════════
 
 def hex_to_rgb(hex_color: str) -> tuple:
@@ -193,47 +193,85 @@ def smart_dark(img_rgb: Image.Image) -> float:
     return round(min(max(0.20 + (avg / 255) * 0.35, 0.15), 0.55), 2)
 
 def smart_wrap(text: str, font, max_w: int, draw) -> list:
-    BREAK_AFTER = set('。！？…；')
-    chunks, buf = [], ''
-    for ch in text:
-        buf += ch
-        if ch in BREAK_AFTER:
-            chunks.append(buf); buf = ''
-    if buf:
-        chunks.append(buf)
+    """
+    智慧自適應斷行演算法 (支援中文避頭尾與末行字數平衡)
+    """
+    # 避頭標點：不能出現在一行開頭
+    PUNCT_START_FORBIDDEN = set('，、。！？；：」』）｝〉》】」”’）,.;!?﹐︰＇＂）］｝〉》」』】﹞－_—')
+    # 避尾標點：不能出現在一行末尾
+    PUNCT_END_FORBIDDEN = set('「『（｛〈《【“‘（［｛〈《「『【〔')
 
     def w(t): return draw.textbbox((0, 0), t, font=font)[2]
-
-    lines, cur = [], ''
-    for chunk in chunks:
-        if w(cur + chunk) <= max_w:
-            cur += chunk
-        else:
-            if cur: lines.append(cur); cur = ''
-            for ch in chunk:
-                if w(cur + ch) <= max_w:
-                    cur += ch
-                else:
-                    if cur: lines.append(cur)
-                    cur = ch
-    if cur: lines.append(cur)
-
-    if len(lines) == 1 and len(lines[0]) >= 12:
-        s = lines[0]; mid = len(s) // 2; best = mid
-        for off in range(0, mid + 1):
-            for pos in [mid - off, mid + off + 1]:
-                if 0 < pos <= len(s) and s[pos - 1] in BREAK_AFTER:
-                    best = pos; break
+    
+    text = text.strip()
+    if not text:
+        return []
+        
+    # 如果整行放得下，直接返回單行
+    if w(text) <= max_w:
+        return [text]
+        
+    lines = []
+    remaining = text
+    
+    while remaining:
+        # 1. 測量當前寬度限制下，最多能容納多少個字元
+        best_fit_len = 0
+        for i in range(1, len(remaining) + 1):
+            if w(remaining[:i]) <= max_w:
+                best_fit_len = i
             else:
-                continue
+                break
+        
+        if best_fit_len == 0:
+            best_fit_len = 1
+            
+        if best_fit_len >= len(remaining):
+            lines.append(remaining)
             break
-        lines = [s[:best], s[best:]] if s[best:] else [s]
-
-    if len(lines) >= 2 and len(lines[-1]) <= 3:
-        merged = lines[-2] + lines[-1]; mid = len(merged) // 2
-        lines  = lines[:-2] + [merged[:mid], merged[mid:]]
-
-    return lines if lines else [text]
+            
+        # 2. 回溯尋找標點符號作為最佳自然切分點 (回溯最多 8 個字)
+        found_punct_break = False
+        lookback_limit = max(1, best_fit_len - 8)
+        for i in range(best_fit_len, lookback_limit - 1, -1):
+            if i < len(remaining) and remaining[i-1] in '，、。！？；：」』）｝〉》】,.;!?﹐':
+                next_char = remaining[i] if i < len(remaining) else ''
+                # 確保切分後，下一行開頭不是避頭標點
+                if next_char not in PUNCT_START_FORBIDDEN:
+                    best_fit_len = i
+                    found_punct_break = True
+                    break
+        
+        # 3. 若沒有標點，則執行強制避頭尾規則
+        if not found_punct_break:
+            next_char = remaining[best_fit_len] if best_fit_len < len(remaining) else ''
+            # 避頭：如果下一行開頭是標點，把標點拉到上一行末尾 (Hanging Punctuation)
+            if next_char in PUNCT_START_FORBIDDEN:
+                if best_fit_len + 1 <= len(remaining):
+                    best_fit_len += 1
+            # 避尾：如果當前行末尾是前括號，則推到下一行開頭
+            elif remaining[best_fit_len - 1] in PUNCT_END_FORBIDDEN:
+                if best_fit_len - 1 > 0:
+                    best_fit_len -= 1
+        
+        lines.append(remaining[:best_fit_len])
+        remaining = remaining[best_fit_len:]
+        
+    # 4. 平衡最後兩行字數，避免最後一行只剩下 1~3 個字的孤行孤字 (Orphan Line)
+    if len(lines) >= 2:
+        last_line = lines[-1]
+        prev_line = lines[-2]
+        if len(last_line) <= 3 and len(prev_line) >= 8:
+            merged = prev_line + last_line
+            mid = len(merged) // 2
+            # 確保平衡切分點同樣遵守避頭規則
+            while mid < len(merged) and merged[mid] in PUNCT_START_FORBIDDEN:
+                mid += 1
+            if mid < len(merged):
+                lines[-2] = merged[:mid]
+                lines[-1] = merged[mid:]
+                
+    return lines
 
 def manual_wrap(text: str) -> list:
     return [l for l in text.split('\n') if l.strip()] or [text]
@@ -326,7 +364,7 @@ def generate_card(row, row_idx, zf, zip_index,
 
     override    = overrides.get(str(row_idx), {})
     custom_text = override.get('content', None)
-    custom_src  = override.get('source', None)  # 新增：取得自訂出處設定
+    custom_src  = override.get('source', None)  # 取得自訂出處設定
     font_size   = override.get('font_size', g_size_content)
 
     # ── 底圖 ──────────────────────────────────────────────────
@@ -467,10 +505,10 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             st.markdown("**✏️ 個別卡片客製化**")
 
             # 1. 客製化正文
-            default_text = override.get(
-                'content',
-                str(row_p.get('Content', '')).replace(' ', '')
-            )
+            raw_content = str(row_p.get('Content', '')).replace(' ', '')
+            csv_text = "" if raw_content == "nan" else raw_content
+            default_text = override.get('content', csv_text)
+            
             custom_text = st.text_area(
                 "手動斷句（Enter 換行；清空則恢復智能斷行）",
                 value=default_text, height=140,
@@ -478,44 +516,58 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 help="直接按 Enter 換行。清空文字框則使用智能斷行。"
             )
 
-            # 2. 客製化出處（新增）
-            default_source = override.get(
-                'source',
-                str(row_p.get('Source', '')).strip()
-            )
+            # 2. 客製化出處
+            raw_source = str(row_p.get('Source', '')).strip()
+            csv_source = "" if raw_source == "nan" else raw_source
+            default_source = override.get('source', csv_source)
+            
             custom_source = st.text_input(
                 "手動修改出處（留空或刪除所有文字即可完全不顯示）",
                 value=default_source,
                 key=f"ts_{preview_row}",
-                help="您可以自由編輯此處文字，如僅留下章節名稱，或直接清空本欄位以刪除小卡上的出處資訊。"
+                help="您可以自由編輯此處文字，或直接清空本欄位以刪除小卡上的出處資訊。"
             )
 
-            # 3. 客製化字型大小
+            # 3. 客製化字型大小 (範圍同步為 20 - 100)
             current_size = int(override.get('font_size', g_font_size_content))
             custom_size  = st.slider(
                 "此卡片正文字體大小",
-                min_value=20, max_value=70,
-                value=current_size, step=2,
+                min_value=20, max_value=100,
+                value=current_size if 20 <= current_size <= 100 else g_font_size_content,
+                step=1,
                 key=f"ss_{preview_row}"
             )
 
-            col_save, col_reset = st.columns(2)
-            with col_save:
-                if st.button("💾 儲存此卡設定", key=f"save_{preview_row}"):
-                    entry = {}
-                    if custom_text.strip():
-                        entry['content'] = custom_text
-                    if custom_size != g_font_size_content:
-                        entry['font_size'] = custom_size
-                    # 儲存自訂出處 (即使為空也予以保留以配合手動刪除的需求)
-                    entry['source'] = custom_source
-                    
-                    st.session_state.card_overrides[row_key] = entry
-                    st.success(f"✅ 第 {preview_row} 筆已儲存！")
-            with col_reset:
-                if st.button("🔄 還原預設", key=f"reset_{preview_row}"):
-                    st.session_state.card_overrides.pop(row_key, None)
-                    st.success("已還原為全局設定。")
+            # ── 自動儲存與同步機制 ───────────────────────────────────
+            new_override = {}
+            has_changes = False
+
+            # 比對是否有實質性的內容異動
+            if custom_text.strip() and custom_text != csv_text:
+                new_override['content'] = custom_text
+                has_changes = True
+
+            if custom_source != csv_source:
+                new_override['source'] = custom_source
+                has_changes = True
+
+            if custom_size != g_font_size_content:
+                new_override['font_size'] = custom_size
+                has_changes = True
+
+            if has_changes:
+                st.session_state.card_overrides[row_key] = new_override
+                st.caption("✨ *已自動儲存此卡客製化設定*")
+            else:
+                st.session_state.card_overrides.pop(row_key, None)
+
+            # 還原按鈕控制
+            if st.button("🔄 還原此卡為全局設定", key=f"reset_{preview_row}"):
+                st.session_state.card_overrides.pop(row_key, None)
+                st.session_state.pop(f"ta_{preview_row}", None)
+                st.session_state.pop(f"ts_{preview_row}", None)
+                st.session_state.pop(f"ss_{preview_row}", None)
+                st.rerun()
 
             if st.session_state.card_overrides:
                 st.markdown("---")
@@ -533,7 +585,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             if custom_text.strip():
                 live_override['content'] = custom_text
             live_override['font_size'] = custom_size
-            live_override['source']    = custom_source  # 帶入即時預覽自訂出處
+            live_override['source']    = custom_source  # 即時預覽出處變更
 
             card_p, _, used_dark, font_name = generate_card(
                 row_p, preview_row, zf_p, idx_p,
