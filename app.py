@@ -194,11 +194,11 @@ def smart_dark(img_rgb: Image.Image) -> float:
 
 def smart_wrap(text: str, font, max_w: int, draw) -> list:
     """
-    智慧自適應斷行演算法 (支援中文避頭尾與末行字數平衡)
+    智慧子句優先自適應排版演算法 (支援中文避頭尾與均勻切分)
     """
-    # 避頭標點：不能出現在一行開頭
+    # 避頭字元
     PUNCT_START_FORBIDDEN = set('，、。！？；：」』）｝〉》】」”’）,.;!?﹐︰＇＂）］｝〉》」』】﹞－_—')
-    # 避尾標點：不能出現在一行末尾
+    # 避尾字元
     PUNCT_END_FORBIDDEN = set('「『（｛〈《【“‘（［｛〈《「『【〔')
 
     def w(t): return draw.textbbox((0, 0), t, font=font)[2]
@@ -207,71 +207,62 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
     if not text:
         return []
         
-    # 如果整行放得下，直接返回單行
-    if w(text) <= max_w:
-        return [text]
-        
-    lines = []
-    remaining = text
+    # 1. 依中文標點符號，保留標點將整句切分為天然子句
+    pattern = re.compile(r'([^，、。！？；：﹐\n]+[，、。！？；：﹐\n]*)')
+    clauses = pattern.findall(text)
     
-    while remaining:
-        # 1. 測量當前寬度限制下，最多能容納多少個字元
-        best_fit_len = 0
-        for i in range(1, len(remaining) + 1):
-            if w(remaining[:i]) <= max_w:
-                best_fit_len = i
-            else:
-                break
+    if not clauses:
+        clauses = [text]
         
-        if best_fit_len == 0:
-            best_fit_len = 1
+    final_lines = []
+    
+    # 2. 逐個處理子句
+    for clause in clauses:
+        clause = clause.strip()
+        if not clause:
+            continue
             
-        if best_fit_len >= len(remaining):
-            lines.append(remaining)
-            break
-            
-        # 2. 回溯尋找標點符號作為最佳自然切分點 (回溯最多 8 個字)
-        found_punct_break = False
-        lookback_limit = max(1, best_fit_len - 8)
-        for i in range(best_fit_len, lookback_limit - 1, -1):
-            if i < len(remaining) and remaining[i-1] in '，、。！？；：」』）｝〉》】,.;!?﹐':
-                next_char = remaining[i] if i < len(remaining) else ''
-                # 確保切分後，下一行開頭不是避頭標點
-                if next_char not in PUNCT_START_FORBIDDEN:
-                    best_fit_len = i
-                    found_punct_break = True
-                    break
-        
-        # 3. 若沒有標點，則執行強制避頭尾規則
-        if not found_punct_break:
-            next_char = remaining[best_fit_len] if best_fit_len < len(remaining) else ''
-            # 避頭：如果下一行開頭是標點，把標點拉到上一行末尾 (Hanging Punctuation)
-            if next_char in PUNCT_START_FORBIDDEN:
-                if best_fit_len + 1 <= len(remaining):
-                    best_fit_len += 1
-            # 避尾：如果當前行末尾是前括號，則推到下一行開頭
-            elif remaining[best_fit_len - 1] in PUNCT_END_FORBIDDEN:
-                if best_fit_len - 1 > 0:
-                    best_fit_len -= 1
-        
-        lines.append(remaining[:best_fit_len])
-        remaining = remaining[best_fit_len:]
-        
-    # 4. 平衡最後兩行字數，避免最後一行只剩下 1~3 個字的孤行孤字 (Orphan Line)
-    if len(lines) >= 2:
-        last_line = lines[-1]
-        prev_line = lines[-2]
+        # 如果子句寬度在小卡安全限制內，直接作為完整的一行
+        if w(clause) <= max_w:
+            final_lines.append(clause)
+        else:
+            # 如果單個子句過長，則從中間點對稱且均勻地切分成兩行或多行
+            remaining = clause
+            while w(remaining) > max_w:
+                n = len(remaining)
+                mid = n // 2
+                
+                # 避頭：避免切分後，新行的開頭字元出現在禁忌清單中
+                while mid < n and remaining[mid] in PUNCT_START_FORBIDDEN:
+                    mid += 1
+                    
+                # 避尾：避免切分後，當前行末尾出現前括號等禁忌字元
+                while mid > 1 and remaining[mid - 1] in PUNCT_END_FORBIDDEN:
+                    mid -= 1
+                    
+                # 切出前半段
+                part = remaining[:mid]
+                final_lines.append(part)
+                remaining = remaining[mid:]
+                
+            if remaining:
+                final_lines.append(remaining)
+                
+    # 3. 自適應平衡最後兩行字數，防止尾行出現孤字孤詞 (如僅剩 1~3 字)
+    if len(final_lines) >= 2:
+        last_line = final_lines[-1]
+        prev_line = final_lines[-2]
         if len(last_line) <= 3 and len(prev_line) >= 8:
             merged = prev_line + last_line
             mid = len(merged) // 2
-            # 確保平衡切分點同樣遵守避頭規則
+            # 平衡分割點同樣需要遵守避頭原則
             while mid < len(merged) and merged[mid] in PUNCT_START_FORBIDDEN:
                 mid += 1
             if mid < len(merged):
-                lines[-2] = merged[:mid]
-                lines[-1] = merged[mid:]
+                final_lines[-2] = merged[:mid]
+                final_lines[-1] = merged[mid:]
                 
-    return lines
+    return final_lines
 
 def manual_wrap(text: str) -> list:
     return [l for l in text.split('\n') if l.strip()] or [text]
@@ -718,7 +709,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 )
 
 elif not (uploaded_csv and uploaded_zip):
-    st.info("💡 請在上方分別拖入 csv 與 zip 素材包。")
+    st.info("💡 請在上方分別拖入 csv 與 zip素材包。")
 
 # ══════════════════════════════════════════════════════════════
 # 結果顯示
