@@ -326,6 +326,7 @@ def generate_card(row, row_idx, zf, zip_index,
 
     override    = overrides.get(str(row_idx), {})
     custom_text = override.get('content', None)
+    custom_src  = override.get('source', None)  # 新增：取得自訂出處設定
     font_size   = override.get('font_size', g_size_content)
 
     # ── 底圖 ──────────────────────────────────────────────────
@@ -356,6 +357,7 @@ def generate_card(row, row_idx, zf, zip_index,
     raw_content = str(row.get('Content', '')).replace(' ', '')
 
     if custom_text is not None:
+        # 若自訂文字包含手動換行 "\n" 則使用手動換行，否則仍使用智能斷行
         if '\n' in custom_text:
             lines = manual_wrap(custom_text)
         else:
@@ -371,9 +373,17 @@ def generate_card(row, row_idx, zf, zip_index,
     # 整句決定最終字型（整張卡正文全部用這個）
     font_content, font_name = pick_font(check_text, font_size)
 
-    # ── 出處：同樣整句切換 ────────────────────────────────────
-    src = str(row.get('Source', ''))
-    if src and src != 'nan':
+    # ── 出處：支援自訂與防空值過濾 ────────────────────────────
+    if custom_src is not None:
+        src = custom_src.strip()
+    else:
+        src = str(row.get('Source', '')).strip()
+
+    # 智慧過濾：若出處內容只包含「摘自：」或為空，則不予繪製
+    if src in ("摘自：", "摘自:", "摘自", "nan") or not src:
+        src = ""
+
+    if src:
         font_source, _ = pick_font(src, size_source)
     else:
         font_source    = font_content
@@ -391,8 +401,8 @@ def generate_card(row, row_idx, zf, zip_index,
         draw = draw_text_pro(draw, card, (x, y), line, font_content,
                              fill_rgb, stroke_w=stroke_w, glow_str=glow_str)
 
-    # ── 繪製出處 ──────────────────────────────────────────────
-    if src and src != 'nan':
+    # ── 繪製出處（若出處非空才繪製） ───────────────────────────
+    if src:
         bs = draw.textbbox((0, 0), src, font=font_source)
         xs = (1000 - (bs[2] - bs[0])) / 2
         draw = draw_text_pro(draw, card, (xs, 900), src, font_source,
@@ -456,6 +466,7 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
             st.markdown("---")
             st.markdown("**✏️ 個別卡片客製化**")
 
+            # 1. 客製化正文
             default_text = override.get(
                 'content',
                 str(row_p.get('Content', '')).replace(' ', '')
@@ -467,6 +478,19 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                 help="直接按 Enter 換行。清空文字框則使用智能斷行。"
             )
 
+            # 2. 客製化出處（新增）
+            default_source = override.get(
+                'source',
+                str(row_p.get('Source', '')).strip()
+            )
+            custom_source = st.text_input(
+                "手動修改出處（留空或刪除所有文字即可完全不顯示）",
+                value=default_source,
+                key=f"ts_{preview_row}",
+                help="您可以自由編輯此處文字，如僅留下章節名稱，或直接清空本欄位以刪除小卡上的出處資訊。"
+            )
+
+            # 3. 客製化字型大小
             current_size = int(override.get('font_size', g_font_size_content))
             custom_size  = st.slider(
                 "此卡片正文字體大小",
@@ -483,6 +507,9 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                         entry['content'] = custom_text
                     if custom_size != g_font_size_content:
                         entry['font_size'] = custom_size
+                    # 儲存自訂出處 (即使為空也予以保留以配合手動刪除的需求)
+                    entry['source'] = custom_source
+                    
                     st.session_state.card_overrides[row_key] = entry
                     st.success(f"✅ 第 {preview_row} 筆已儲存！")
             with col_reset:
@@ -498,13 +525,15 @@ if uploaded_csv and uploaded_zip and st.session_state.zip_index_cache:
                     tags = []
                     if 'content'   in v: tags.append("手動斷句")
                     if 'font_size' in v: tags.append(f"字體 {v['font_size']}")
+                    if 'source'    in v: tags.append("自訂出處")
                     st.caption(f"第 {k} 筆：{'、'.join(tags)}")
 
         with c_right:
             live_override = {}
             if custom_text.strip():
-                live_override['content']   = custom_text
+                live_override['content'] = custom_text
             live_override['font_size'] = custom_size
+            live_override['source']    = custom_source  # 帶入即時預覽自訂出處
 
             card_p, _, used_dark, font_name = generate_card(
                 row_p, preview_row, zf_p, idx_p,
