@@ -144,7 +144,7 @@ else:
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**✨ 文字清晰強化**")
-stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 10, 6, step=1)
+stroke_width  = st.sidebar.slider("文字描邊寬度", 0, 16, 8, step=1)
 glow_strength = st.sidebar.slider("文字發光強度（0=關閉）", 0, 8, 0, step=1)
 
 st.sidebar.markdown("---")
