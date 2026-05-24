@@ -4,6 +4,7 @@ import zipfile
 import io
 import os
 import re
+import math
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
@@ -232,10 +233,10 @@ def find_semantic_split(text: str, mid: int) -> int:
 
 def smart_wrap(text: str, font, max_w: int, draw) -> list:
     """
-    智慧子句優先自適應排版演算法 (強弱標點分級切分機制)
+    智慧子句優先自適應排版演算法 (動態安全字數與強弱標點分級機制)
     """
     # 避頭字元
-    PUNCT_START_FORBIDDEN = set('，、。！？；：」』）｝〉》】」”’）,.;!?﹐︰＇＂）］｝〉》」』】﹞－_—')
+    PUNCT_START_FORBIDDEN = set('，、。！？；：」』）｝〉裝》】」”’）,.;!?﹐︰＇＂）］｝〉》」』】﹞－_—')
     # 避尾字元
     PUNCT_END_FORBIDDEN = set('「『（｛〈《【“‘（［｛〈《「『【〔')
 
@@ -272,24 +273,53 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
             # 如果單個子句過長，則使用語意感知與大半徑標點搜尋演算法切開
             remaining = clause
             while w(remaining) > max_w:
-                n = len(remaining)
-                mid = n // 2
+                total_width = w(remaining)
+                # 計算賸餘長度預估需要均分成幾行
+                num_lines = max(2, math.ceil(total_width / max_w))
+                ideal_len = len(remaining) // num_lines
+                
+                # 計算當前字型大小下的絕對極限安全字數（防止語意搜尋超出邊界）
+                max_safe_len = 0
+                for i in range(1, len(remaining) + 1):
+                    if w(remaining[:i]) <= max_w:
+                        max_safe_len = i
+                    else:
+                        break
+                
+                if max_safe_len == 0:
+                    max_safe_len = 1
+                
+                # 理想切分字數不得大於極限安全字數的 95%
+                ideal_len = min(ideal_len, int(max_safe_len * 0.95))
+                if ideal_len <= 0:
+                    ideal_len = max_safe_len
                 
                 # 智慧尋找最佳斷句點
+                mid = ideal_len
                 mid = find_semantic_split(remaining, mid)
                 
+                # 保險把關：如果語意搜尋出來的寬度超標，退回理想安全寬度
+                if w(remaining[:mid]) > max_w:
+                    mid = ideal_len
+                
                 # 避頭：避免切分後，新行的開頭字元出現在禁忌清單中
-                while mid < n and remaining[mid] in PUNCT_START_FORBIDDEN:
+                while mid < len(remaining) and remaining[mid] in PUNCT_START_FORBIDDEN:
                     mid += 1
                     
                 # 避尾：避免切分後，當前行末尾出現前括號等禁忌字元
                 while mid > 1 and remaining[mid - 1] in PUNCT_END_FORBIDDEN:
                     mid -= 1
                 
-                # 安全保護，避免邊界錯誤
-                if mid <= 0 or mid >= n:
-                    mid = n // 2
-                    
+                # 最終安全閥：若因避頭避尾調整導致寬度超標，強制退回絕對安全字數
+                if mid <= 0 or mid >= len(remaining) or w(remaining[:mid]) > max_w:
+                    mid = max_safe_len
+                    while mid < len(remaining) and remaining[mid] in PUNCT_START_FORBIDDEN:
+                        mid += 1
+                    while mid > 1 and remaining[mid - 1] in PUNCT_END_FORBIDDEN:
+                        mid -= 1
+                    if mid <= 0 or mid >= len(remaining) or w(remaining[:mid]) > max_w:
+                        mid = max_safe_len
+                
                 # 切出前半段
                 part = remaining[:mid]
                 final_lines.append(part)
@@ -308,7 +338,7 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
             # 平衡分割點同樣需要遵守避頭原則
             while mid < len(merged) and merged[mid] in PUNCT_START_FORBIDDEN:
                 mid += 1
-            if mid < len(merged):
+            if mid < len(merged) and w(merged[:mid]) <= max_w and w(merged[mid:]) <= max_w:
                 final_lines[-2] = merged[:mid]
                 final_lines[-1] = merged[mid:]
                 
@@ -436,10 +466,11 @@ def generate_card(row, row_idx, zf, zip_index,
     raw_content = str(row.get('Content', '')).replace(' ', '')
 
     if custom_text is not None:
-        # 若自訂文字包含手動換行 "\n" 則使用手動換行，否則仍使用智慧斷行
+        # 若自訂文字包含手動換行 "\n" 則使用手動換行，否則仍使用智能斷行
         if '\n' in custom_text:
             lines = manual_wrap(custom_text)
         else:
+            # 採用優化後的 880 寬度限制
             temp_font, _ = pick_font(custom_text, font_size)
             lines = smart_wrap(custom_text, temp_font, 880, draw)
         check_text = custom_text.replace('\n', '')
