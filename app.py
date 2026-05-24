@@ -233,21 +233,31 @@ def find_semantic_split(text: str, mid: int) -> int:
 
 def smart_wrap(text: str, font, max_w: int, draw) -> list:
     """
-    智慧子句優先自適應排版演算法 (動態安全字數與強弱標點分級機制)
+    智慧子句優先自適應排版演算法 (導入懸掛標點容差安全機制)
     """
     # 避頭字元
-    PUNCT_START_FORBIDDEN = set('，、。！？；：」』）｝〉裝》】」”’）,.;!?﹐︰＇＂）］｝〉》」』】﹞－_—')
+    PUNCT_START_FORBIDDEN = set('，、。！？；：」』）｝〉》】」”’）,.;!?﹐︰＇＂）］｝〉》」』】﹞－_—')
     # 避尾字元
     PUNCT_END_FORBIDDEN = set('「『（｛〈《【“‘（［｛〈《「『【〔')
 
     def w(t): return draw.textbbox((0, 0), t, font=font)[2]
     
+    def is_within_safe_width(line: str) -> bool:
+        """
+        智慧安全寬度檢測（支援懸掛標點外掛容差）：
+        若行尾為標點符號，則給予 50 像素的額外外掛容差。
+        """
+        width = w(line)
+        if line and line[-1] in '，、。！？；：」』）｝〉》】”’）,.;!?﹐':
+            return width <= (max_w + 50)  # 允許標點些微超出邊界以維護排版和諧
+        return width <= max_w
+
     text = text.strip()
     if not text:
         return []
         
     # 如果整行放得下，直接返回單行
-    if w(text) <= max_w:
+    if is_within_safe_width(text):
         return [text]
         
     # 1. 第一輪：僅在句號、問號、驚嘆號、分號等「強斷句標點」處進行首輪切割
@@ -266,13 +276,13 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
         if not clause:
             continue
             
-        # 如果子句寬度在限制（880像素）內，直接作為完整的一行
-        if w(clause) <= max_w:
+        # 如果子句寬度在安全限制內，直接作為完整的一行
+        if is_within_safe_width(clause):
             final_lines.append(clause)
         else:
             # 如果單個子句過長，則使用語意感知與大半徑標點搜尋演算法切開
             remaining = clause
-            while w(remaining) > max_w:
+            while not is_within_safe_width(remaining):
                 total_width = w(remaining)
                 # 計算賸餘長度預估需要均分成幾行
                 num_lines = max(2, math.ceil(total_width / max_w))
@@ -281,7 +291,7 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
                 # 計算當前字型大小下的絕對極限安全字數（防止語意搜尋超出邊界）
                 max_safe_len = 0
                 for i in range(1, len(remaining) + 1):
-                    if w(remaining[:i]) <= max_w:
+                    if is_within_safe_width(remaining[:i]):
                         max_safe_len = i
                     else:
                         break
@@ -299,7 +309,7 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
                 mid = find_semantic_split(remaining, mid)
                 
                 # 保險把關：如果語意搜尋出來的寬度超標，退回理想安全寬度
-                if w(remaining[:mid]) > max_w:
+                if not is_within_safe_width(remaining[:mid]):
                     mid = ideal_len
                 
                 # 避頭：避免切分後，新行的開頭字元出現在禁忌清單中
@@ -311,13 +321,13 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
                     mid -= 1
                 
                 # 最終安全閥：若因避頭避尾調整導致寬度超標，強制退回絕對安全字數
-                if mid <= 0 or mid >= len(remaining) or w(remaining[:mid]) > max_w:
+                if mid <= 0 or mid >= len(remaining) or not is_within_safe_width(remaining[:mid]):
                     mid = max_safe_len
                     while mid < len(remaining) and remaining[mid] in PUNCT_START_FORBIDDEN:
                         mid += 1
                     while mid > 1 and remaining[mid - 1] in PUNCT_END_FORBIDDEN:
                         mid -= 1
-                    if mid <= 0 or mid >= len(remaining) or w(remaining[:mid]) > max_w:
+                    if mid <= 0 or mid >= len(remaining) or not is_within_safe_width(remaining[:mid]):
                         mid = max_safe_len
                 
                 # 切出前半段
@@ -338,7 +348,7 @@ def smart_wrap(text: str, font, max_w: int, draw) -> list:
             # 平衡分割點同樣需要遵守避頭原則
             while mid < len(merged) and merged[mid] in PUNCT_START_FORBIDDEN:
                 mid += 1
-            if mid < len(merged) and w(merged[:mid]) <= max_w and w(merged[mid:]) <= max_w:
+            if mid < len(merged) and is_within_safe_width(merged[:mid]) and is_within_safe_width(merged[mid:]):
                 final_lines[-2] = merged[:mid]
                 final_lines[-1] = merged[mid:]
                 
